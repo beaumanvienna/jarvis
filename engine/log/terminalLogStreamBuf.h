@@ -45,16 +45,22 @@ namespace AIAssistant
             {
                 std::string clean = StripAnsi(m_Buffer);
 
-                if (m_TerminalManager != nullptr)
+                // ------------------------------------------------------
+                // Prevent empty or whitespace-only lines from being logged
+                // ------------------------------------------------------
+                if (!clean.empty())
                 {
-                    m_TerminalManager->EnqueueLogLine(clean);
-                }
+                    if (m_TerminalManager != nullptr)
+                    {
+                        m_TerminalManager->EnqueueLogLine(clean);
+                    }
 
-                if (m_FileLogger && m_FileLogger->is_open())
-                {
-                    std::lock_guard<std::mutex> lock(m_FileMutex);
-                    (*m_FileLogger) << clean << "\n";
-                    m_FileLogger->flush();
+                    if (m_FileLogger && m_FileLogger->is_open())
+                    {
+                        std::lock_guard<std::mutex> lock(m_FileMutex);
+                        (*m_FileLogger) << clean << "\n";
+                        m_FileLogger->flush();
+                    }
                 }
 
                 m_Buffer.clear();

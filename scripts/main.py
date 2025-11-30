@@ -82,7 +82,13 @@ class _JarvisRedirect:
             notify_python_error(f"Failed to initialize JarvisRedirect: {exception}")
             self._redirect = None
 
+        # Local buffer to assemble complete lines before sending to C++
+        self._buffer = ""
+
     def write(self, msg):
+        # Important: do NOT drop newline-only messages.
+        # print() may send the text and the trailing "\n" separately.
+        # We accumulate into _buffer and emit full lines ending with "\n".
         if not msg:
             return
 
@@ -91,12 +97,35 @@ class _JarvisRedirect:
             return
 
         try:
-            self._redirect(msg.encode("utf-8"))
+            self._buffer += msg
+            while "\n" in self._buffer:
+                line, rest = self._buffer.split("\n", 1)
+                self._buffer = rest
+
+                # Skip completely empty lines (avoid pure blank log lines)
+                if line == "":
+                    continue
+
+                self._redirect((line + "\n").encode("utf-8"))
         except Exception as exception:
             notify_python_error(f"JarvisRedirect.write() failed: {exception}")
 
     def flush(self):
-        pass
+        if not self._buffer:
+            return
+
+        if self._redirect is None:
+            notify_python_error("JarvisRedirect.flush() called but redirect function is missing")
+            self._buffer = ""
+            return
+
+        try:
+            # Flush any trailing partial line as a full line
+            self._redirect((self._buffer + "\n").encode("utf-8"))
+        except Exception as exception:
+            notify_python_error(f"JarvisRedirect.flush() failed: {exception}")
+        finally:
+            self._buffer = ""
 
 
 redir = _JarvisRedirect()

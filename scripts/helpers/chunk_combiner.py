@@ -76,7 +76,7 @@ def handle_chunk_output_added(trigger_file: str) -> None:
     folder = trigger_path.parent
 
     # ------------------------------------------------------------------
-    # 1) Gather all chunk input files
+    # Gather all chunk input files
     # ------------------------------------------------------------------
     chunk_inputs: dict[int, Path] = {}
     try:
@@ -94,7 +94,7 @@ def handle_chunk_output_added(trigger_file: str) -> None:
         return
 
     # ------------------------------------------------------------------
-    # 2) Check output chunks (soft waiting)
+    # Check output chunks (soft waiting)
     # ------------------------------------------------------------------
     chunk_outputs: dict[int, Path] = {}
     for index, input_file in chunk_inputs.items():
@@ -114,7 +114,7 @@ def handle_chunk_output_added(trigger_file: str) -> None:
         chunk_outputs[index] = output
 
     # ------------------------------------------------------------------
-    # 3) Determine combined output file location
+    # Determine combined output file location
     # ------------------------------------------------------------------
     folder_name = folder.name
     if not folder_name.endswith("_chunks"):
@@ -127,7 +127,22 @@ def handle_chunk_output_added(trigger_file: str) -> None:
     combined_output = folder.parent / original_md_name.replace(".md", ".output.md")
 
     # ------------------------------------------------------------------
-    # 4) Combine sorted outputs
+    # Skip recombination if combined output is newer than all chunks
+    # ------------------------------------------------------------------
+    try:
+        if combined_output.exists():
+            combined_mtime = combined_output.stat().st_mtime
+            newest_chunk_mtime = max(p.stat().st_mtime for p in chunk_outputs.values())
+            if newest_chunk_mtime <= combined_mtime:
+                return
+    except Exception as exception:
+        _notify_chunker_error(
+            f"ChunkCombiner: failed combined-output timestamp check: {exception}"
+        )
+        return
+
+    # ------------------------------------------------------------------
+    # Combine sorted outputs
     # ------------------------------------------------------------------
     sorted_indices = sorted(chunk_outputs.keys())
     log(f"Combining {len(sorted_indices)} chunks into: {combined_output}")
@@ -149,7 +164,7 @@ def handle_chunk_output_added(trigger_file: str) -> None:
     combined_text = "".join(combined_parts)
 
     # ------------------------------------------------------------------
-    # 5) Write final combined output
+    # Write final combined output
     # ------------------------------------------------------------------
     try:
         combined_output.write_text(combined_text, encoding="utf-8")

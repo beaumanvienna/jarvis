@@ -97,7 +97,8 @@ namespace AIAssistant
                 "Url",           //
                 "Model",         //
                 "InterfaceType", //
-                "IndexAPI"       //
+                "IndexAPI",      //
+                "MaxFileSizekB"  //
         };
 
     public:

@@ -69,17 +69,5 @@ These are all documented in:
 
 ---
 
-# 5. Summary
-
-This index covers every `.md` documentation file currently present:
-
-| Area | Count |
-|------|-------|
-| Application | 7 |
-| Engine | 6 |
-| Python scripts | 1 |
-| Web interface | 1 |
-| **Total** | **15 markdown documents** |
-
 
 

@@ -10,12 +10,12 @@ License: GPL-3.0
 This document specifies the **JC Workflow File format (JCWF)** and the corresponding execution model for **JarvisAgent**.  
 JCWF is a **JSON-based** workflow description language that allows JarvisAgent to:
 
-- Define workflows as graphs of **tasks** (a workflow *pipeline*).
-- Express **dependencies** between tasks (Makefile-style, with file freshness checks).
-- Attach **triggers** (cron-like, file-based, structure-based).
-- Execute tasks using **C++ modules** and **Python scripts**, including AI assistant calls.
-- Monitor execution and propagate **data** from one task to another.
-- Integrate with the **JarvisAgent web UI** for visualization and control.
+- Define workflows as graphs of tasks (a workflow pipeline).
+- Express dependencies between tasks, including file freshness checks.
+- Attach triggers (cron-like, file-based, structure-based).
+- Execute tasks using C++ modules and Python scripts, including AI assistant calls.
+- Monitor execution and propagate data from one task to another.
+- Integrate with the JarvisAgent web UI for visualization and control.
 
 This specification focuses on:
 
@@ -31,15 +31,15 @@ This specification focuses on:
 
 ## 1. Introduction
 
-JarvisAgent orchestrates a variety of automation tasks: PDF-to-markdown conversion, AI assistant queries, file watching, and more.  
-The **JC Workflow File (JCWF)** provides a declarative way to describe these tasks and their relationships, so that JarvisAgent can:
+JarvisAgent orchestrates a variety of automation tasks: document-to-markdown conversion (PDF, DOCX, XLSX, PPTX), AI assistant queries, file watching, and more.  
+The JC Workflow File (JCWF) provides a declarative way to describe these tasks and their relationships, so that JarvisAgent can:
 
 - Load workflows at startup or on demand.  
 - Run them reactively (on triggers) or explicitly (manual trigger from CLI / web UI).  
 - Parallelize non-dependent tasks.  
 - Track progress and expose status to the web dashboard.
 
-You can think of each workflow as a **pipeline**: a sequence/DAG of stages, similar in spirit to a Vulkan rendering pipeline, but for automation tasks rather than shaders and fixed-function stages.
+You can think of each workflow as a pipeline: a sequence/DAG of stages for automation tasks.
 
 This document defines:
 
@@ -49,33 +49,35 @@ This document defines:
 
 ### 1.1 Requirements Language
 
-The key words **"MUST"**, **"MUST NOT"**, **"REQUIRED"**, **"SHALL"**, **"SHALL NOT"**, **"SHOULD"**, **"SHOULD NOT"**, **"RECOMMENDED"**, **"MAY"**, and **"OPTIONAL"** in this document are to be interpreted as described in [ RFC 2119 ](https://datatracker.ietf.org/doc/html/rfc2119).
+The key words **"MUST"**, **"MUST NOT"**, **"REQUIRED"**, **"SHALL"**, **"SHALL NOT"**, **"SHOULD"**, **"SHOULD NOT"**, **"RECOMMENDED"**, **"MAY"**, and **"OPTIONAL"** in this document are to be interpreted as described in [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119).
 
 ---
 
 ## 2. Terminology
 
 - **Workflow**: A named collection of tasks, triggers, and global configuration.  
-- **Task**: A unit of work (e.g., convert a PDF, call an AI assistant, run a Python function, invoke a shell command).  
-- **Dependency**: A requirement that one or more tasks **MUST** complete successfully (and be up to date) before another task starts.  
-- **Trigger**: A condition that **starts** a workflow or a task:  
+- **Task**: A unit of work (e.g., convert a document, call an AI assistant, run a Python function, invoke a shell command).  
+- **Dependency**: A requirement that one or more tasks MUST complete successfully (and be up to date) before another task starts.  
+- **Trigger**: A condition that starts a workflow or a task:  
   - Time-based (cron-like)  
   - File-based (XLS/CSV/Markdown changes)  
   - Structure-based (e.g., “for each subsection in chapter 3”)  
   - Manual (explicit command or UI action)  
 - **Data Slot**: A named input or output field associated with a task.  
-  - Example: task `convert_pdf` with input slot `pdf_path` and output slot `markdown_path`.  
+  - Example: task `convert_document` with input slot `source_path` and output slot `markdown_path`.  
 - **Context / State**: A key-value store that persists data across tasks within a workflow run.  
   - Example: `context["today"] = "2025-12-01"` or `context["report_url"] = "https://..."`.  
 - **Run**: A single execution instance of a workflow with its own state and logs.  
-- **JCWF Runtime**: The JarvisAgent orchestration layer that loads, validates, and runs JCWF workflows.
+- **JCWF Runtime**: The JarvisAgent orchestration layer that loads, validates, and runs JCWF workflows.  
+- **Environment**: Optional metadata and variables attached to a task (for example, environment variables for shell tasks, or an assistant environment for AI tasks).  
+- **Queue Files**: Optional STNG_, TASK_, CNXT artifacts used by JarvisAgent’s queue-based execution; JCWF can reference these explicitly per task.
 
 ---
 
 ## 3. JCWF JSON Specification
 
-JCWF files **MUST** be valid JSON documents.  
-The file extension **SHOULD** be `.jcwf`.
+JCWF files MUST be valid JSON documents.  
+The file extension SHOULD be `.jcwf`.
 
 ### 3.1 Root Object
 
@@ -97,13 +99,13 @@ The root object has the following top-level fields:
 #### 3.1.1 Fields
 
 - `version` (REQUIRED, string)  
-  - The JCWF spec version. For this document, `"1.0"` is assumed.
-  - Implementations **MUST** reject unknown major versions.
+  - The JCWF spec version. For this document, `"1.0"` is assumed.  
+  - Implementations MUST reject unknown major versions.
 
 - `id` (REQUIRED, string)  
   - Unique identifier for this workflow within the JarvisAgent environment.  
-  - When workflows are created externally (e.g., from the web UI), the UI **SHOULD** generate an ID that is unique and stable (e.g., a UUID or a slug).  
-  - JarvisAgent **MUST** reject a new workflow whose `id` collides with an already loaded workflow.
+  - When workflows are created externally (e.g., from the web UI), the UI SHOULD generate an ID that is unique and stable (for example, a UUID or a slug).  
+  - JarvisAgent MUST reject a new workflow whose `id` collides with an already loaded workflow.
 
 - `label` (OPTIONAL, string)  
   - Human-friendly name for UI display.
@@ -112,16 +114,16 @@ The root object has the following top-level fields:
   - Documentation or comments about the workflow.
 
 - `triggers` (OPTIONAL, array of trigger objects)  
-  - Defines when and how the workflow starts. See **3.2**.
+  - Defines when and how the workflow starts. See 3.2.
 
 - `tasks` (REQUIRED, object)  
-  - Map from **taskId** to a task specification. See **3.3**.
+  - Map from taskId to a task specification. See 3.3.
 
 - `dataflow` (OPTIONAL, array)  
-  - Explicit data wiring between task outputs and inputs. See **3.5**.
+  - Explicit data wiring between task outputs and inputs. See 3.5.
 
 - `defaults` (OPTIONAL, object)  
-  - Default settings for tasks, retries, timeouts, etc. See **3.6**.
+  - Default settings for tasks, retries, timeouts, etc. See 3.6.
 
 ---
 
@@ -172,12 +174,12 @@ Each trigger has:
 }
 ```
 
-- Tied to JarvisAgent’s existing `FileWatcher`.  
-- **MUST** map events to JarvisAgent event types.
+- Tied to JarvisAgent’s existing FileWatcher.  
+- MUST map events to JarvisAgent event types.
 
 #### 3.2.3 Structure-Based Triggers
 
-Used for “for each row / section” style operations. These **do not** schedule time; rather, they define **how** to expand tasks when the workflow is triggered.
+Used for “for each row / section” style operations. These do not schedule time; rather, they define how to expand tasks when the workflow is triggered.
 
 ```jsonc
 {
@@ -193,13 +195,13 @@ Used for “for each row / section” style operations. These **do not** schedul
     "iterator": {
       "mode": "rows",
       "range": "A2:D100",
-      "binding": "row" 
+      "binding": "row"
     }
   }
 }
 ```
 
-At runtime, the engine will expand designated tasks from this **iterator** (see tasks with `"mode": "per_item"` in 3.3.2).
+At runtime, the engine will expand designated tasks from this iterator (see tasks with `"mode": "per_item"` in 3.3.2).
 
 #### 3.2.4 Manual Triggers
 
@@ -220,7 +222,7 @@ Manual triggers are exposed in the web UI and/or CLI.
 
 ### 3.3 Tasks
 
-The `tasks` field is a mapping from **taskId** to a task object:
+The `tasks` field is a mapping from taskId to a task object:
 
 ```jsonc
 "tasks": {
@@ -242,6 +244,8 @@ Each task has:
   "depends_on": ["load_xls"],
   "file_inputs": ["data/report.xlsx"],
   "file_outputs": ["output/report.summary.txt"],
+  "environment": { /* see 3.3.6 */ },
+  "queue_binding": { /* see 3.3.6 */ },
   "params": { /* type-specific */ },
   "inputs": { /* named inputs */ },
   "outputs": { /* named outputs */ },
@@ -256,32 +260,31 @@ Each task has:
 #### 3.3.1 Task Types
 
 - `python`  
-  - Executes a function or script via the PythonEngine.
+  Executes a function or script via the PythonEngine.
 
   ```jsonc
   {
-    "id": "convert_pdf",
+    "id": "convert_document",
     "type": "python",
     "params": {
-      "module": "workflows.pdf_tasks",
-      "function": "convert_pdf_to_markdown"
+      "module": "workflows.doc_tasks",
+      "function": "convert_to_markdown"
     },
     "inputs": {
-      "pdf_path": {"type": "string"},
-      "output_dir": {"type": "string"}
+      "source_path": { "type": "string" },
+      "output_dir": { "type": "string" }
     },
     "outputs": {
-      "markdown_path": {"type": "string"}
+      "markdown_path": { "type": "string" }
     },
-    "file_inputs": ["${inputs.pdf_path}"],
+    "file_inputs": ["${inputs.source_path}"],
     "file_outputs": ["${outputs.markdown_path}"]
   }
   ```
 
 - `shell`  
-  - Executes a command on the host (JarvisAgent SHOULD restrict/whitelist this).  
-  - **Security rule**: shell commands **MUST** start with `scripts/` (relative to the JarvisAgent working directory).  
-    - Example: `"command": "scripts/clean_artifacts.sh"`
+  Executes a command on the host (JarvisAgent SHOULD restrict/whitelist this).  
+  Security rule: shell commands MUST start with `scripts/` (relative to the JarvisAgent working directory).
 
   ```jsonc
   {
@@ -295,7 +298,7 @@ Each task has:
   ```
 
 - `ai_call`  
-  - A high-level “call AI assistant” task that routes via Python or C++ backend.
+  A high-level “call AI” task that routes via Python or C++ backend.
 
   ```jsonc
   {
@@ -304,28 +307,32 @@ Each task has:
     "params": {
       "provider": "openai",
       "model": "gpt-4.1-mini",
+      "mode": "one_shot",  // or "assistant"
       "prompt_template": "Summarize the following report:\n{{report_text}}"
     },
     "inputs": {
-      "report_text": {"type": "string"}
+      "report_text": { "type": "string" }
     },
     "outputs": {
-      "summary": {"type": "string"}
+      "summary": { "type": "string" }
     }
   }
   ```
 
+  - `mode: "one_shot"` means a single request/response using the provided inputs.  
+  - `mode: "assistant"` means using a long-lived assistant environment (see 3.3.6) where less context may be passed each time because conversation state is maintained externally.
+
 - `internal`  
-  - Built-in C++ actions, like updating status, writing to ChatMessagePool, creating STNG_/TASK_/CNXT files, etc.
+  Built-in C++ actions, such as updating status, writing to ChatMessagePool, or coordinating queue artifacts.
 
 #### 3.3.2 Mode: `single` vs `per_item`
 
 - `mode: "single"` (default)  
-  - Task executes once per workflow run.
+  Task executes once per workflow run.
 
 - `mode: "per_item"`  
-  - Task is **expanded** per iterator item (e.g., each row in XLS, each subsection in a document).  
-  - The expansion is driven by a **structure trigger** (3.2.3) or by explicit dataflow list sources.
+  Task is expanded per iterator item (for example, each row in XLS, each subsection in a document).  
+  The expansion is driven by a structure trigger (3.2.3) or by explicit dataflow list sources.
 
 Example:
 
@@ -334,31 +341,32 @@ Example:
   "id": "summarize_section",
   "type": "ai_call",
   "mode": "per_item",
-  "params": { "provider": "openai", "model": "gpt-4.1-mini" },
+  "params": {
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "mode": "assistant"
+  },
   "inputs": {
-    "section_text": {"type": "string"},
-    "section_title": {"type": "string"}
+    "section_text": { "type": "string" },
+    "section_title": { "type": "string" }
   },
   "outputs": {
-    "section_summary": {"type": "string"}
+    "section_summary": { "type": "string" }
   },
   "file_inputs": ["${inputs.section_text}"],
   "file_outputs": ["output/sections/${inputs.section_title}.summary.txt"]
 }
 ```
 
-At runtime, the **iterator binding** (e.g., `"row"`, `"subsection"`) will be injected into the inputs, and thus into the `file_inputs` / `file_outputs` templates.
-
 #### 3.3.3 Timeouts and Retries
 
 - `timeout_ms` (OPTIONAL, integer)  
-  - Maximum execution time per task instance.  
-  - If exceeded, task is considered failed.
+  Maximum execution time per task instance. If exceeded, the task is considered failed.
 
 - `retries` (OPTIONAL, object)  
   - `max_attempts` (integer)  
   - `backoff_ms` (integer) linear backoff between retries.  
-  - Implementation **MAY** extend with exponential strategy later.
+  Implementations MAY extend this with exponential strategies later.
 
 #### 3.3.4 Inputs & Outputs (Data Slots)
 
@@ -366,7 +374,7 @@ Inputs and outputs are declared to aid validation and UI:
 
 ```jsonc
 "inputs": {
-  "pdf_path": { "type": "string", "required": true },
+  "source_path": { "type": "string", "required": true },
   "config": { "type": "object", "required": false }
 },
 "outputs": {
@@ -374,12 +382,12 @@ Inputs and outputs are declared to aid validation and UI:
 }
 ```
 
-- Each key is a **data slot** name.  
+- Each key is a data slot name.  
 - Types are advisory but useful for sanity checks and editor tooling.
 
 #### 3.3.5 Clean Tasks
 
-A workflow **MAY** define a dedicated `clean` task that removes generated artifacts. For example:
+A workflow MAY define a dedicated `clean` task that removes generated artifacts. For example:
 
 ```jsonc
 "tasks": {
@@ -394,24 +402,57 @@ A workflow **MAY** define a dedicated `clean` task that removes generated artifa
 }
 ```
 
-The orchestrator or UI **MAY** expose a “clean” action that simply runs this task (ignoring usual dependency checks).
+The orchestrator or UI MAY expose a “clean” action that simply runs this task (ignoring usual dependency checks).
+
+#### 3.3.6 Environment and Queue Integration (STNG_, TASK_, CNXT)
+
+Tasks MAY describe additional environment and queue-related details:
+
+```jsonc
+"environment": {
+  "name": "assistant_env_daily_reports",
+  "variables": {
+    "PROJECT": "DailyReports",
+    "LOCALE": "en-US"
+  },
+  "assistant_id": "daily-report-assistant"
+},
+"queue_binding": {
+  "stng_files": ["STNG_daily.json"],
+  "task_files": ["TASK_summarize.json"],
+  "cnxt_files": ["CNXT_daily.json"]
+}
+```
+
+- `environment` (OPTIONAL, object)  
+  - `name` (OPTIONAL, string): Logical name for this environment.  
+  - `variables` (OPTIONAL, object): Key-value environment variables for shell or Python tasks.  
+  - `assistant_id` (OPTIONAL, string): Identifier for an AI assistant environment.  
+    - For `ai_call` tasks with `mode: "assistant"`, this MAY reference a preconfigured assistant that keeps its own long-lived context. In that case, JCWF does not need to send full context on every call; the backend can rely on the assistant’s stored state.
+
+- `queue_binding` (OPTIONAL, object)  
+  - `stng_files` (OPTIONAL, array of strings): STNG_ settings files associated with this task.  
+  - `task_files` (OPTIONAL, array of strings): TASK_ files representing work items for this task.  
+  - `cnxt_files` (OPTIONAL, array of strings): CNXT_ context files (for example, conversation or state).  
+
+JarvisAgent MAY use `queue_binding` to map between high-level tasks and the low-level queue directories. A task can thus have an explicit array of associated STNG_/TASK_/CNXT files when it is an AI or queue-integrated task.
 
 ---
 
-### 3.4 Dependency Semantics and Makefile-Like Checks
+### 3.4 Dependency Semantics and Up-to-Date Checks
 
-JCWF models dependencies **per task**, similar to Makefile targets and prerequisites.
-
-Each task can declare:
+JCWF models dependencies per task. Each task can declare:
 
 - `depends_on` (OPTIONAL, array of task IDs)  
-  - Other tasks that **must succeed** before this task is considered **ready**.  
-- `file_inputs` (OPTIONAL, array of strings)  
-  - Files or patterns this task reads from.  
-- `file_outputs` (OPTIONAL, array of strings)  
-  - Files or patterns this task produces/updates.
+  Other tasks that must succeed before this task is considered ready.  
 
-Example (Makefile-like) for “chunk an MD file if the output is missing or stale”:
+- `file_inputs` (OPTIONAL, array of strings)  
+  Files or patterns this task reads from.  
+
+- `file_outputs` (OPTIONAL, array of strings)  
+  Files or patterns this task produces or updates.
+
+Example for “chunk an MD file if the output is missing or stale”:
 
 ```jsonc
 "tasks": {
@@ -433,26 +474,28 @@ Example (Makefile-like) for “chunk an MD file if the output is missing or stal
 }
 ```
 
-**Rules (Makefile-style):**
+Conceptually, this is similar to how a Makefile decides whether a target is up to date.
 
-1. **Task graph**  
-   - `depends_on` defines a **task-level DAG**.  
-   - If a task has no `depends_on`, it is considered a **root** task (subject to triggers).  
-   - The workflow **MUST NOT** contain cycles in `depends_on`. Cycles SHOULD be detected and rejected at load time.
+Rules:
 
-2. **Up-to-date check**  
-   - A task **MAY** be skipped as “up to date” if all of the following are true:  
+1. Task graph  
+   - `depends_on` defines a task-level DAG.  
+   - If a task has no `depends_on`, it is considered a root task (subject to triggers).  
+   - The workflow MUST NOT contain cycles in `depends_on`. Cycles SHOULD be detected and rejected at load time.
+
+2. Up-to-date check  
+   - A task MAY be skipped as “up to date” if all of the following are true:  
      - All `file_outputs` exist, and  
-     - Each `file_output` has a modification time **newer than or equal to** every `file_input` and all upstream outputs from `depends_on` tasks.  
-   - If any `file_output` is missing, or any `file_input`/upstream output is newer, the task is considered **stale** and **MUST** run.  
-   - If `file_inputs` or `file_outputs` are omitted, the engine **MUST** assume the task is **not** up to date and SHOULD run it whenever its dependencies are satisfied.
+     - Each `file_output` has a modification time newer than or equal to every `file_input` and all upstream outputs from `depends_on` tasks.  
+   - If any `file_output` is missing, or any `file_input` or upstream output is newer, the task is considered stale and MUST run.  
+   - If `file_inputs` or `file_outputs` are omitted, the engine MUST assume the task is not up to date and SHOULD run it whenever its dependencies are satisfied.
 
-3. **Per-item mode**  
-   - For `mode: "per_item"` tasks, the same freshness rules apply **per item**.  
-   - `file_inputs` / `file_outputs` may use templates (e.g., `"output/${inputs.section_title}.summary.txt"`). The runtime evaluates templates per item before checking timestamps.
+3. Per-item mode  
+   - For `mode: "per_item"` tasks, the same freshness rules apply per item.  
+   - `file_inputs` and `file_outputs` may use templates (for example, `"output/${inputs.section_title}.summary.txt"`). The runtime evaluates templates per item before checking timestamps.
 
-4. **Interaction with triggers**  
-   - A trigger (cron, file, structure, manual) creates a **new workflow run**.  
+4. Interaction with triggers  
+   - A trigger (cron, file, structure, manual) creates a new workflow run.  
    - Within that run, each task is examined for readiness and freshness as above.  
    - It is valid to model a “no-op” run where all tasks are up to date and thus skipped.
 
@@ -484,10 +527,10 @@ Optional explicit wiring of outputs to inputs.
 
 Semantics:
 
-- The runtime **MUST** ensure that the source task has completed and produced the referenced output before starting the target task.  
-- For `per_item` tasks, dataflow can create **fan-out**: one `load_xls` task -> many `summarize_section` tasks.
+- The runtime MUST ensure that the source task has completed and produced the referenced output before starting the target task.  
+- For `per_item` tasks, dataflow can create fan-out: one `load_xls` task to many `summarize_section` tasks.
 
-If `dataflow` is omitted, tasks may rely purely on the workflow **state** (context) or external files.
+If `dataflow` is omitted, tasks may rely purely on the workflow state (context) or external files.
 
 ---
 
@@ -509,30 +552,30 @@ If `dataflow` is omitted, tasks may rely purely on the workflow **state** (conte
 }
 ```
 
-- Task-specific fields override defaults at the same key path.
+Task-specific fields override defaults at the same key path.
 
 ---
 
 ## 4. Execution Model
 
-This section describes how JarvisAgent should execute JCWF workflows across **C++ core**, **Python engines**, and the **web UI**.
+This section describes how JarvisAgent should execute JCWF workflows across the C++ core, Python engines, and the web UI.
 
 ### 4.1 High-Level Flow
 
-1. **Load** `.jcwf` files (from a configured directory).  
-2. **Validate** JSON structure, triggers, and `depends_on` DAG (no cycles).  
-3. **Register** workflows and triggers with JarvisAgent core.  
-4. On trigger activation (cron / file / structure / manual):  
-   - Create a **workflow run instance** with its own ID and context.  
-   - Resolve **ready tasks**:  
+1. Load `.jcwf` files from a configured directory.  
+2. Validate JSON structure, triggers, and the `depends_on` DAG (no cycles).  
+3. Register workflows and triggers with the JarvisAgent core.  
+4. On trigger activation (cron, file, structure, manual):  
+   - Create a workflow run instance with its own ID and context.  
+   - Resolve ready tasks:  
      - All `depends_on` tasks succeeded, and  
      - Inputs are resolvable, and  
-     - Task is not up to date (or up-to-date checking is disabled).  
+     - The task is not up to date (or up-to-date checking is disabled).  
    - Schedule tasks on worker pools and/or Python engines.  
-5. **Monitor** task states, store outputs in a run-local state store (context).  
-6. **Propagate data** as specified by `dataflow`.  
-7. **Update web UI** with real-time status (pending, running, skipped, success, failed).  
-8. Mark workflow run **completed** when no further tasks can run.
+5. Monitor task states, store outputs in a run-local state store (context).  
+6. Propagate data as specified by `dataflow`.  
+7. Update the web UI with real-time status (pending, running, skipped, success, failed).  
+8. Mark the workflow run completed when no further tasks can run.
 
 ---
 
@@ -542,7 +585,7 @@ Responsibilities:
 
 - Parse and hold in-memory representation of workflows:  
   - `WorkflowDefinition` (id, label, triggers, tasks, dataflow).  
-- Listen to cron/file events and map them to workflow triggers.  
+- Listen to cron and file events and map them to workflow triggers.  
 - Maintain a `WorkflowRun` object per workflow execution.  
 - Perform dependency resolution and ready-task scheduling using `depends_on` and file freshness.  
 - Assign tasks to:  
@@ -550,9 +593,9 @@ Responsibilities:
   - Internal handlers (for `internal` tasks).  
   - Shell executor (for `shell` tasks, if allowed).  
 - Track task status (`Pending`, `Ready`, `Running`, `Skipped`, `Succeeded`, `Failed`).  
-- Emit events for UI and logging (e.g., `WorkflowRunStartedEvent`, `TaskStatusChangedEvent`).
+- Emit events for UI and logging (for example, `WorkflowRunStartedEvent`, `TaskStatusChangedEvent`).
 
-Recommended data structures:
+Recommended data structures (conceptual):
 
 - `WorkflowDefinition`  
   - `std::string id;`  
@@ -560,7 +603,7 @@ Recommended data structures:
   - `std::vector<DataflowDef> dataflows;`  
   - `std::vector<TriggerDef> triggers;`
 
-- `TaskDef` (conceptual)  
+- `TaskDef`  
   - `std::string id;`  
   - `std::vector<std::string> dependsOn;`  
   - `std::vector<std::string> fileInputs;`  
@@ -569,18 +612,20 @@ Recommended data structures:
   - `TaskMode mode;`  
   - `JsonLike params;`  
   - `TaskIO inputs;`  
-  - `TaskIO outputs;`
+  - `TaskIO outputs;`  
+  - `EnvironmentDef environment;`  
+  - `QueueBindingDef queueBinding;`
 
 - `WorkflowRun`  
   - `std::string runId;`  
   - `std::string workflowId;`  
   - `RunState state;`  
   - `std::unordered_map<std::string, TaskInstanceState> taskStates;`  
-  - `JsonLikeState context; // e.g. nlohmann::json or similar`
+  - `JsonLikeState context;`
 
-The core orchestrator **SHOULD** be deterministic and thread-safe. It **MAY** use a task queue and worker threads, but heavy work (PDF conversion, AI calls) is delegated to Python or external processes.
+The core orchestrator SHOULD be deterministic and thread-safe. It MAY use a task queue and worker threads, but heavy work (document conversion, AI calls) is delegated to Python or external processes.
 
-Internally, JarvisAgent may map task execution to creation of STNG_, TASK_, and CNXT files in the queue directories; the specifics are an implementation detail, but JCWF gives the orchestrator a higher-level, structured view of what must happen.
+For tasks that integrate with the existing queue system, the orchestrator MAY map task execution to creation or consumption of STNG_, TASK_, and CNXT files in the queue directories according to `queue_binding`.
 
 ---
 
@@ -589,46 +634,46 @@ Internally, JarvisAgent may map task execution to creation of STNG_, TASK_, and 
 Python is responsible for:
 
 - Implementing `python` tasks’ logic.  
-- Acting as a **bridge** for `ai_call` tasks (HTTP requests to AI providers).  
-- Optional helpers for reading XLS, documents, etc., for structure-based iteration.
+- Acting as a bridge for `ai_call` tasks (HTTP requests to AI providers).  
+- Optional helpers for reading XLS, documents, and other sources for structure-based iteration.
 
 Python interface expectations:
 
 - For `python` tasks:
 
   ```python
-  # Example module: workflows/pdf_tasks.py
+  # Example module: workflows/doc_tasks.py
 
-  def convert_pdf_to_markdown(pdf_path: str, output_dir: str, context: dict) -> dict:
+  def convert_to_markdown(source_path: str, output_dir: str, context: dict) -> dict:
       # context: workflow run state (read-only or partial write)
       # return: dict of outputs, e.g. {"markdown_path": "..."}
       ...
   ```
 
 - For `ai_call` tasks, either:  
-  - a generic function that takes provider/model/prompt, or  
-  - a specific module for workflow-specific logic.
+  - A generic function that takes provider/model/mode/prompt and optional assistant/environment identifiers, or  
+  - A specific module for workflow-specific logic.
 
-Python tasks **SHOULD** avoid blocking the GIL unnecessarily (e.g., use I/O-bound calls, async HTTP, etc.). Long-running CPU tasks **MAY** be done via separate processes if needed.
+Python tasks SHOULD avoid blocking the GIL unnecessarily (for example, use I/O-bound calls, async HTTP). Long-running CPU tasks MAY be done via separate processes if needed.
 
 ---
 
-### 4.4 Web UI: Monitoring & Control
+### 4.4 Web UI: Monitoring and Control
 
-The web interface **SHOULD**:
+The web interface SHOULD:
 
 - List registered workflows (id, label, doc, triggers).  
-- Allow manual trigger of workflows and manual **cancel** of runs.  
-- Visualize each `WorkflowRun` as:  
+- Allow manual trigger of workflows and manual cancel of runs.  
+- Visualize each workflow run as:  
   - A DAG of tasks (nodes) with statuses.  
   - A table or card view of all task instances.  
 - Show logs and outputs for each task (where practical).  
-- Permit per-task or per-workflow debugging (e.g., view context, last errors).
+- Permit per-task or per-workflow debugging (for example, view context, last errors).
 
-Data exchange between C++ and Web UI is via:
+Data exchange between C++ and the web UI is via:
 
-- Status snapshots broadcasted by `WebServer` (existing mechanism).  
-- Possibly new routes such as `/workflows`, `/workflow/:id/runs`, `/workflow/:id/run/:runId/tasks`.
+- Status snapshots broadcast by the web server.  
+- HTTP routes such as `/workflows`, `/workflow/:id/runs`, `/workflow/:id/run/:runId/tasks`.
 
 ---
 
@@ -636,29 +681,29 @@ Data exchange between C++ and Web UI is via:
 
 ### 5.1 Readiness Rule
 
-A task instance is **ready** to execute when:
+A task instance is ready to execute when:
 
-1. All tasks in its `depends_on` list have **Succeeded**.  
-2. All its declared required inputs are resolvable from:
+1. All tasks in its `depends_on` list have succeeded.  
+2. All its declared required inputs are resolvable from one of:  
    - Dataflow links,  
    - Workflow context, or  
-   - Static literals / defaults.  
+   - Static literals/defaults.  
 3. The up-to-date check (3.4) either:  
-   - Determines the task is stale, **or**  
+   - Determines the task is stale, or  
    - Is explicitly disabled (implementation option).
 
-Tasks with no `depends_on` and no missing required inputs **MAY** start immediately after the workflow is triggered.
+Tasks with no `depends_on` and no missing required inputs MAY start immediately after the workflow is triggered.
 
 ### 5.2 Parallel Execution
 
-If multiple tasks become **ready** at the same time and do not depend on each other (no path between them in the `depends_on` DAG), the orchestrator **SHOULD** run them in parallel, subject to resource limits (thread pool size, number of Python engines).
+If multiple tasks become ready at the same time and do not depend on each other (no path between them in the `depends_on` DAG), the orchestrator SHOULD run them in parallel, subject to resource limits (thread pool size, number of Python engines).
 
 ### 5.3 Failure Propagation
 
 If a task fails (after all retries):
 
-- Tasks that depend on it **MUST NOT** run, unless a future version introduces an explicit `"allow_failed_prereqs": true` override.  
-- The workflow run status **SHOULD** be marked as `Failed`, unless the failure is confined to optional branches (implementation-defined policy).
+- Tasks that depend on it MUST NOT run, unless a future version introduces an explicit `allow_failed_prereqs: true` override.  
+- The workflow run status SHOULD be marked as `Failed`, unless the failure is confined to optional branches (implementation-defined policy).
 
 ---
 
@@ -666,42 +711,42 @@ If a task fails (after all retries):
 
 ### 6.1 Time-Based (Cron)
 
-- C++ side integrates with a scheduler (e.g., one per second/minute) to check cron expressions.  
-- When a cron fires, it creates a new **WorkflowRun**.
+- The C++ side integrates with a scheduler to check cron expressions.  
+- When a cron fires, it creates a new workflow run.
 
 ### 6.2 File-Based
 
-- Integrated with the existing `FileWatcher`.  
-- When a relevant event is received (path + type), the orchestrator checks matching triggers and starts a run.
+- Integrated with the existing FileWatcher.  
+- When a relevant event is received (path and event type), the orchestrator checks matching triggers and starts a run.
 
 ### 6.3 Structure-Based
 
-- The runtime uses the structure trigger params to **preprocess** input sources (XLS, documents, etc.).  
-- It builds an iterator collection (e.g., list of rows / sections).  
-- For `per_item` tasks, the orchestrator creates **one task instance per item**, injecting the k-th item as inputs.
+- The runtime uses the structure trigger parameters to preprocess input sources (XLS, documents, etc.).  
+- It builds an iterator collection (for example, list of rows or sections).  
+- For `per_item` tasks, the orchestrator creates one task instance per item, injecting the k-th item as inputs.
 
 ### 6.4 Manual
 
-- Web UI or CLI sends a “start workflow” command to the core, referencing workflow `id` and optional initial context.
+- The web UI or CLI sends a “start workflow” command to the core, referencing workflow `id` and optional initial context.
 
 ---
 
-## 7. Monitoring & Reporting
+## 7. Monitoring and Reporting
 
-JarvisAgent **SHOULD** maintain for each workflow run:
+JarvisAgent SHOULD maintain for each workflow run:
 
 - Start time, end time, duration.  
 - Task instance statuses and timestamps.  
 - Error messages, if any.  
 - Key outputs (as configured).
 
-The web UI **SHOULD** offer:
+The web UI SHOULD offer:
 
 - A summary of recent runs (success/failure).  
 - Drill-down views per run.  
-- Log panels for debugging tasks.  
+- Log panels for debugging tasks.
 
-C++ **MAY** expose a compact JSON representation of workflows and runs over an HTTP endpoint for external monitoring.
+The C++ core MAY expose a compact JSON representation of workflows and runs over an HTTP endpoint for external monitoring.
 
 ---
 
@@ -710,33 +755,33 @@ C++ **MAY** expose a compact JSON representation of workflows and runs over an H
 Data flow is a combination of:
 
 1. Explicit `dataflow` wiring.  
-2. Shared run-level `context` (key-value).  
-3. External files and side effects (e.g., generated markdown, XLS).
+2. Shared run-level context (key-value).  
+3. External files and side effects (for example, generated markdown, XLS).
 
 ### 8.1 Task Input Resolution
 
 When a task starts, its inputs are resolved from:
 
-1. Dataflow links (`from_task` → `to_task`).  
-2. Context fields (e.g., `context["config"]`).  
-3. Static literals provided in `params` or `defaults` (like `provider`, `model`).
+1. Dataflow links (`from_task` to `to_task`).  
+2. Context fields (for example, `context["config"]`).  
+3. Static literals provided in `params` or `defaults` (such as `provider`, `model`).
 
-If a **required** input cannot be resolved, the task **MUST** fail fast with a validation error.
+If a required input cannot be resolved, the task MUST fail fast with a validation error.
 
 ### 8.2 Outputs and Context
 
-Task outputs **MAY** be written to:
+Task outputs MAY be written to:
 
 - Local task outputs (for dataflow).  
-- Shared context, if configured (e.g., `"write_to_context": true`).
+- Shared context, if configured (for example, `write_to_context: true`, which may be added in a future revision).
 
-The exact policy is left to implementation, but JCWF **SHOULD** allow a future extension to specify context writes explicitly.
+The exact policy is left to the implementation, but JCWF is designed so that future versions can specify context writes explicitly.
 
 ---
 
 ## 9. JSON Schema (Draft)
 
-Below is a **simplified** JSON Schema for JCWF v1.0. It is not exhaustive but is suitable for validation and editor tooling.
+Below is a simplified JSON Schema for JCWF v1.0. It is not exhaustive but is suitable for validation and editor tooling.
 
 ```json
 {
@@ -816,6 +861,34 @@ Below is a **simplified** JSON Schema for JCWF v1.0. It is not exhaustive but is
           "type": "array",
           "items": { "type": "string" }
         },
+        "environment": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "assistant_id": { "type": "string" },
+            "variables": {
+              "type": "object",
+              "additionalProperties": { "type": ["string", "number", "boolean"] }
+            }
+          }
+        },
+        "queue_binding": {
+          "type": "object",
+          "properties": {
+            "stng_files": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "task_files": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "cnxt_files": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
         "params": { "type": "object" },
         "inputs": {
           "type": "object",
@@ -865,17 +938,10 @@ Below is a **simplified** JSON Schema for JCWF v1.0. It is not exhaustive but is
 
 ## 10. Security Considerations
 
-- `shell` tasks can be dangerous; JarvisAgent **SHOULD** provide configuration flags to disable or restrict them and **MUST** enforce the `scripts/` prefix rule.  
-- `ai_call` tasks send data to external services; sensitive data **MUST** be handled carefully.  
-- JCWF files **SHOULD** be sourced from trusted locations; tampering can change automation behavior.  
-- Structure-based iteration over external documents/XLS files **SHOULD** validate inputs to avoid unexpected expansion or injection.
-
----
-
-## 11. Versioning
-
-- Minor versions (`1.x`) **SHOULD** remain backward compatible with `1.0`.  
-- Major versions (`2.0`, etc.) may introduce breaking changes; implementations **MUST** check `version` before execution.
+- `shell` tasks can be dangerous; JarvisAgent SHOULD provide configuration flags to disable or restrict them and MUST enforce the `scripts/` prefix rule.  
+- `ai_call` tasks send data to external services; sensitive data MUST be handled carefully.  
+- JCWF files SHOULD be sourced from trusted locations; tampering can change automation behavior.  
+- Structure-based iteration over external documents and XLS files SHOULD validate inputs to avoid unexpected expansion or injection.
 
 ---
 

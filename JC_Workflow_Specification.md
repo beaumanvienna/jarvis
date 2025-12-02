@@ -418,9 +418,9 @@ Tasks MAY describe additional environment and queue-related details:
   "assistant_id": "daily-report-assistant"
 },
 "queue_binding": {
-  "stng_files": ["STNG_daily.json"],
-  "task_files": ["TASK_summarize.json"],
-  "cnxt_files": ["CNXT_daily.json"]
+  "stng_files": ["STNG_daily.txt"],
+  "task_files": ["TASK_summarize.txt"],
+  "cnxt_files": ["CNXT_daily.txt"]
 }
 ```
 
@@ -431,9 +431,9 @@ Tasks MAY describe additional environment and queue-related details:
     - For `ai_call` tasks with `mode: "assistant"`, this MAY reference a preconfigured assistant that keeps its own long-lived context. In that case, JCWF does not need to send full context on every call; the backend can rely on the assistant’s stored state.
 
 - `queue_binding` (OPTIONAL, object)  
-  - `stng_files` (OPTIONAL, array of strings): STNG_ settings files associated with this task.  
-  - `task_files` (OPTIONAL, array of strings): TASK_ files representing work items for this task.  
-  - `cnxt_files` (OPTIONAL, array of strings): CNXT_ context files (for example, conversation or state).  
+  - `stng_files` (OPTIONAL, array of strings): STNG_ settings files associated with this task, for example, the tone of the AI.  
+  - `task_files` (OPTIONAL, array of strings): TASK_ files representing work instructions.  
+  - `cnxt_files` (OPTIONAL, array of strings): CNXT_ context files (background information).  
 
 JarvisAgent MAY use `queue_binding` to map between high-level tasks and the low-level queue directories. A task can thus have an explicit array of associated STNG_/TASK_/CNXT files when it is an AI or queue-integrated task.
 

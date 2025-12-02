@@ -40,3 +40,15 @@ This list tracks the remaining work for JarvisAgent.
     - Implement triggers (cron, file-change)
 
 ---
+
+## 6. Python Engine parallelization (new)
+- Add support for multiple independent PythonEngine instances
+- Ensure each interpreter instance owns its own GIL
+- Store PythonEngine instances in std::vector
+- Default engine count: 4
+- Allow override via config.json
+- Expose internal task-queue size for load balancing
+- Dispatch OnEvent() to the PythonEngine with the lowest queued workload
+- Ensure isolated interpreter state per engine
+
+---

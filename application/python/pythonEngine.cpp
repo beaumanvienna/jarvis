@@ -490,4 +490,12 @@ namespace AIAssistant
 
         LOG_APP_INFO("Python engine stopped");
     }
+
+    bool PythonEngine::ExecuteWorkflowTask(TaskDef const& task, std::string& errorMessage)
+    {
+        LOG_APP_INFO("PythonEngine stub: ExecuteWorkflowTask for {}", task.m_Id);
+        // TODO real implementation later
+        return true;
+    }
+
 } // namespace AIAssistant

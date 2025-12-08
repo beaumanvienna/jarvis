@@ -35,6 +35,8 @@ namespace AIAssistant
     class WebServer;
     class ChatMessagePool;
     class PythonEngine;
+    class WorkflowRegistry;
+    class TriggerEngine;
 
     class JarvisAgent : public Application
     {
@@ -56,9 +58,11 @@ namespace AIAssistant
         int64_t GetStartupTimestamp() const;
         StatusRenderer& GetStatusRenderer() { return m_StatusRenderer; }
         PythonEngine* GetPythonEngine() { return m_PythonEngine.get(); }
+        WorkflowRegistry* GetWorkflowRegistry() { return m_WorkflowRegistry.get(); }
 
     private:
         void CheckIfFinished();
+        void InitializeWorkflows();
 
     private:
         bool m_IsFinished{false};
@@ -73,6 +77,9 @@ namespace AIAssistant
         std::unique_ptr<WebServer> m_WebServer;
         std::unique_ptr<ChatMessagePool> m_ChatMessagePool;
         std::unique_ptr<PythonEngine> m_PythonEngine;
+
+        std::unique_ptr<WorkflowRegistry> m_WorkflowRegistry;
+        std::unique_ptr<TriggerEngine> m_TriggerEngine;
     };
 
     class App

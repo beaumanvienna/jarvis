@@ -19,6 +19,8 @@
    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.*/
 
+#include <filesystem>
+
 #include "engine.h"
 #include "jarvisAgent.h"
 #include "event/events.h"
@@ -29,6 +31,9 @@
 #include "file/probUtils.h"
 #include "web/chatMessages.h"
 #include "python/pythonEngine.h"
+#include "workflow/workflowRegistry.h"
+#include "workflow/workflowOrchestrator.h"
+#include "workflow/triggerEngine.h"
 
 namespace AIAssistant
 {
@@ -106,6 +111,51 @@ namespace AIAssistant
                 m_PythonEngine->OnStart();
             }
         }
+
+        // ---------------------------------------------------------
+        // Initialize workflow system (registry + orchestrator + triggers)
+        // ---------------------------------------------------------
+        InitializeWorkflows();
+    }
+
+    //--------------------------------------------------------------------
+
+    void JarvisAgent::InitializeWorkflows()
+    {
+        m_WorkflowRegistry = std::make_unique<WorkflowRegistry>();
+
+        std::filesystem::path workflowsDirectory = Core::g_Core->GetConfig().m_WorkflowsFolderFilepath;
+
+        if (!m_WorkflowRegistry->LoadDirectory(workflowsDirectory))
+        {
+            LOG_APP_WARN("JarvisAgent::InitializeWorkflows: no workflows loaded from '{}'", workflowsDirectory.string());
+        }
+        else
+        {
+            if (!m_WorkflowRegistry->ValidateAll())
+            {
+                LOG_APP_WARN("JarvisAgent::InitializeWorkflows: one or more workflows failed validation");
+            }
+        }
+
+        WorkflowOrchestrator::Get().SetRegistry(m_WorkflowRegistry.get());
+
+        m_TriggerEngine = std::make_unique<TriggerEngine>(
+            [this](TriggerEngine::TriggerFiredEvent const& triggerEvent)
+            {
+                LOG_APP_INFO("JarvisAgent: Trigger fired for workflow '{}' (trigger id '{}')", triggerEvent.m_WorkflowId,
+                             triggerEvent.m_TriggerId);
+
+                // For now we run the workflow synchronously in this thread.
+                // Later this can be moved onto Core::g_Core->GetThreadPool().
+                bool const runOk = WorkflowOrchestrator::Get().RunWorkflowOnce(triggerEvent.m_WorkflowId);
+
+                if (!runOk)
+                {
+                    LOG_APP_ERROR("JarvisAgent: Workflow '{}' run from trigger '{}' failed", triggerEvent.m_WorkflowId,
+                                  triggerEvent.m_TriggerId);
+                }
+            });
     }
 
     //--------------------------------------------------------------------
@@ -140,6 +190,13 @@ namespace AIAssistant
             }
         }
 
+        // Tick trigger engine (cron-based triggers)
+        if (m_TriggerEngine)
+        {
+            auto const now = std::chrono::system_clock::now();
+            m_TriggerEngine->Tick(now);
+        }
+
         // Termination logic
         CheckIfFinished();
     }
@@ -170,11 +227,15 @@ namespace AIAssistant
             });
 
         fs::path filePath;
+        bool hasFileEvent = false;
+        TriggerEngine::FileEventType fileEventType = TriggerEngine::FileEventType::Created;
 
         dispatcher.Dispatch<FileAddedEvent>(
             [&](FileAddedEvent& fileEvent)
             {
                 filePath = fileEvent.GetPath();
+                fileEventType = TriggerEngine::FileEventType::Created;
+                hasFileEvent = true;
                 return false;
             });
 
@@ -182,6 +243,8 @@ namespace AIAssistant
             [&](FileModifiedEvent& fileEvent)
             {
                 filePath = fileEvent.GetPath();
+                fileEventType = TriggerEngine::FileEventType::Modified;
+                hasFileEvent = true;
                 return false;
             });
 
@@ -189,6 +252,8 @@ namespace AIAssistant
             [&](FileRemovedEvent& fileEvent)
             {
                 filePath = fileEvent.GetPath();
+                fileEventType = TriggerEngine::FileEventType::Deleted;
+                hasFileEvent = true;
                 return false;
             });
 
@@ -199,6 +264,15 @@ namespace AIAssistant
                 m_PythonEngine->Stop();
                 return true;
             });
+
+        // ---------------------------------------------------------
+        // Forward file events into TriggerEngine (file_watch triggers)
+        // ---------------------------------------------------------
+        if (hasFileEvent && m_TriggerEngine)
+        {
+            auto const now = std::chrono::system_clock::now();
+            m_TriggerEngine->NotifyFileEvent(filePath.string(), fileEventType, now);
+        }
 
         // -----------------------------------------------------------------------------------
         // ChatMessagePool handling (PROB_xxx files)

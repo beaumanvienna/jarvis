@@ -28,6 +28,8 @@
 #include <memory>
 #include <condition_variable>
 
+#include "workflow/workflowTypes.h"
+
 // Forward declaration to avoid including Python headers here
 struct _object;
 typedef _object PyObject;
@@ -64,6 +66,8 @@ namespace AIAssistant
         void OnEvent(std::shared_ptr<Event> eventPtr);
 
         bool IsRunning() const { return m_Running; }
+
+        bool ExecuteWorkflowTask(TaskDef const& task, std::string& errorMessage);
 
     private:
         void Reset();

@@ -35,7 +35,7 @@ JarvisAgent orchestrates a variety of automation tasks: document-to-markdown con
 The JC Workflow File (JCWF) provides a declarative way to describe these tasks and their relationships, so that JarvisAgent can:
 
 - Load workflows at startup or on demand.  
-- Run them reactively (on triggers) or explicitly (manual trigger from CLI / web UI).  
+- Run them automatically upon registration, reactively (on triggers), or explicitly (manual trigger from CLI / web UI).  
 - Parallelize non-dependent tasks.  
 - Track progress and expose status to the web dashboard.
 
@@ -62,7 +62,8 @@ The key words **"MUST"**, **"MUST NOT"**, **"REQUIRED"**, **"SHALL"**, **"SHALL 
   - Time-based (cron-like)  
   - File-based (XLS/CSV/Markdown changes)  
   - Structure-based (e.g., “for each subsection in chapter 3”)  
-  - Manual (explicit command or UI action)  
+  - Manual (explicit command or UI action)
+  - Auto (default trigger if no other trigger is provided)
 - **Data Slot**: A named input or output field associated with a task.  
   - Example: task `convert_document` with input slot `source_path` and output slot `markdown_path`.  
 - **Context / State**: A key-value store that persists data across tasks within a workflow run.  
@@ -133,9 +134,11 @@ A workflow MAY be started by one or more triggers. Manual start is always allowe
 
 Each trigger has:
 
+- If no trigger is provided in the JCWF file, 'auto' is assumed as the default trigger.
+
 ```jsonc
 {
-  "type": "cron | file_watch | structure | manual",
+  "type": "auto | cron | file_watch | structure | manual",
   "id": "morning-run",
   "enabled": true,
   "params": { /* type dependent */ }
@@ -203,7 +206,19 @@ Used for “for each row / section” style operations. These do not schedule ti
 
 At runtime, the engine will expand designated tasks from this iterator (see tasks with `"mode": "per_item"` in 3.3.2).
 
-#### 3.2.4 Manual Triggers
+#### 3.2.4 Auto Triggers
+
+```jsonc
+{
+  "type": "auto",
+  "id": "auto-trigger",
+  "enabled": true,
+  "params": {}
+}
+```
+
+- This trigger type starts the workflow automatically upon registration without any additional parameters.
+
 
 ```jsonc
 {
@@ -792,7 +807,7 @@ Below is a simplified JSON Schema for JCWF v1.0. It is not exhaustive but is sui
   "properties": {
     "version": {
       "type": "string",
-      "pattern": "^1\.0$"
+      "pattern": "^1\\.0$"
     },
     "id": { "type": "string" },
     "label": { "type": "string" },
@@ -819,6 +834,7 @@ Below is a simplified JSON Schema for JCWF v1.0. It is not exhaustive but is sui
       "additionalProperties": true
     }
   },
+
   "$defs": {
     "trigger": {
       "type": "object",
@@ -826,13 +842,20 @@ Below is a simplified JSON Schema for JCWF v1.0. It is not exhaustive but is sui
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["cron", "file_watch", "structure", "manual"]
+          "enum": [
+            "auto",
+            "cron",
+            "file_watch",
+            "structure",
+            "manual"
+          ]
         },
         "id": { "type": "string" },
         "enabled": { "type": "boolean" },
         "params": { "type": "object" }
       }
     },
+
     "task": {
       "type": "object",
       "required": ["id", "type"],
@@ -919,6 +942,7 @@ Below is a simplified JSON Schema for JCWF v1.0. It is not exhaustive but is sui
         }
       }
     },
+
     "dataflow": {
       "type": "object",
       "required": ["from_task", "to_task"],
@@ -932,6 +956,7 @@ Below is a simplified JSON Schema for JCWF v1.0. It is not exhaustive but is sui
     }
   }
 }
+
 ```
 
 ---

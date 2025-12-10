@@ -29,7 +29,7 @@ Expected JCWF JSON structure:
   "doc": "Generates a daily report from XLS and sends it to an AI assistant.",
   "triggers": [
     {
-      "type": "cron | file_watch | structure | manual",
+      "type": "auto | cron | file_watch | structure | manual",
       "id": "trigger-id",
       "enabled": true,
       "params": { ... }
@@ -137,6 +137,7 @@ namespace AIAssistant
         bool hasVersion = false;
         bool hasId = false;
         bool hasTasks = false;
+        bool hasTriggers = false;
 
         for (auto field : root)
         {
@@ -200,6 +201,8 @@ namespace AIAssistant
                 {
                     return false;
                 }
+
+                hasTriggers = true;
             }
             else if (key == "tasks")
             {
@@ -247,6 +250,19 @@ namespace AIAssistant
         {
             errorMessage = "workflow missing required field: tasks";
             return false;
+        }
+
+        // If no trigger is provided in the JCWF file, 'auto' is assumed as the default trigger.
+        if (!hasTriggers)
+        {
+            WorkflowTrigger const autoTrigger{
+                .m_Type = WorkflowTriggerType::Auto, //
+                .m_Id = "auto",                      //
+                .m_IsEnabled = true,                 //
+                .m_ParamsJson = "{}"                 //
+            };
+
+            outputDefinition.m_Triggers.push_back(autoTrigger);
         }
 
         return true;

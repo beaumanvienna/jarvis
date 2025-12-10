@@ -211,6 +211,21 @@ namespace AIAssistant
 
     TriggerEngine::TriggerEngine(TriggerCallback const& triggerCallback) : m_TriggerCallback{triggerCallback} {}
 
+    void TriggerEngine::AddAutoTrigger(std::string const& workflowId, std::string const& triggerId, bool isEnabled)
+    {
+        LOG_APP_INFO("TriggerEngine::AddAutoTrigger: registered auto trigger '{}' for workflow '{}'", triggerId, workflowId);
+
+        if (!isEnabled)
+        {
+            LOG_APP_INFO("TriggerEngine::AddAutoTrigger: trigger '{}' for workflow '{}' is disabled; not firing", triggerId,
+                         workflowId);
+            return;
+        }
+
+        // Auto triggers start the workflow immediately upon registration.
+        FireTrigger(workflowId, triggerId);
+    }
+
     void TriggerEngine::AddCronTrigger(std::string const& workflowId, std::string const& triggerId,
                                        std::string const& expression, bool isEnabled)
     {

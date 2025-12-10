@@ -32,6 +32,7 @@
 #include "web/chatMessages.h"
 #include "python/pythonEngine.h"
 #include "workflow/workflowRegistry.h"
+#include "workflow/workflowTriggerBinder.h"
 #include "workflow/workflowOrchestrator.h"
 #include "workflow/triggerEngine.h"
 
@@ -156,6 +157,19 @@ namespace AIAssistant
                                   triggerEvent.m_TriggerId);
                 }
             });
+
+        // -----------------------------------------------------------------
+        // Bind all JCWF triggers into TriggerEngine
+        // -----------------------------------------------------------------
+        if (m_WorkflowRegistry && m_TriggerEngine)
+        {
+            WorkflowTriggerBinder workflowTriggerBinder;
+            workflowTriggerBinder.RegisterAll(*m_WorkflowRegistry, *m_TriggerEngine);
+        }
+        else
+        {
+            LOG_APP_WARN("JarvisAgent::InitializeWorkflows: skipping trigger registration (registry or engine missing)");
+        }
     }
 
     //--------------------------------------------------------------------

@@ -37,6 +37,7 @@ namespace AIAssistant
     enum class WorkflowTriggerType
     {
         Unknown = 0,
+        Auto,
         Cron,
         FileWatch,
         Structure,

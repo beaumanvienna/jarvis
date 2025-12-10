@@ -26,9 +26,7 @@ namespace AIAssistant
 {
     namespace
     {
-        bool RequireObject(simdjson::ondemand::value& value,
-                           std::string const& context,
-                           std::string& errorMessage)
+        bool RequireObject(simdjson::ondemand::value& value, std::string const& context, std::string& errorMessage)
         {
             auto typeResult = value.type();
             if (typeResult.error() != simdjson::SUCCESS)
@@ -50,9 +48,7 @@ namespace AIAssistant
             return true;
         }
 
-        bool RequireArray(simdjson::ondemand::value& value,
-                          std::string const& context,
-                          std::string& errorMessage)
+        bool RequireArray(simdjson::ondemand::value& value, std::string const& context, std::string& errorMessage)
         {
             auto typeResult = value.type();
             if (typeResult.error() != simdjson::SUCCESS)
@@ -79,8 +75,7 @@ namespace AIAssistant
     // Utility helpers
     // ---------------------------------------------------------------------
 
-    bool WorkflowJsonParser::ExtractRawJson(simdjson::ondemand::value& element,
-                                            std::string& rawJsonOut) const
+    bool WorkflowJsonParser::ExtractRawJson(simdjson::ondemand::value& element, std::string& rawJsonOut) const
     {
         auto jsonResult = simdjson::to_json_string(element);
         if (jsonResult.error() != simdjson::SUCCESS)
@@ -94,8 +89,7 @@ namespace AIAssistant
         return true;
     }
 
-    bool WorkflowJsonParser::ElementToString(simdjson::ondemand::value& element,
-                                             std::string& output) const
+    bool WorkflowJsonParser::ElementToString(simdjson::ondemand::value& element, std::string& output) const
     {
         auto typeResult = element.type();
         if (typeResult.error() != simdjson::SUCCESS)
@@ -117,8 +111,7 @@ namespace AIAssistant
             output.assign(stringView.begin(), stringView.end());
             return true;
         }
-        else if (type == simdjson::ondemand::json_type::number ||
-                 type == simdjson::ondemand::json_type::boolean)
+        else if (type == simdjson::ondemand::json_type::number || type == simdjson::ondemand::json_type::boolean)
         {
             auto jsonResult = simdjson::to_json_string(element);
             if (jsonResult.error() != simdjson::SUCCESS)
@@ -178,6 +171,11 @@ namespace AIAssistant
 
     WorkflowTriggerType WorkflowJsonParser::StringToTriggerType(std::string const& typeString) const
     {
+        if (typeString == "auto")
+        {
+            return WorkflowTriggerType::Auto;
+        }
+
         if (typeString == "cron")
         {
             return WorkflowTriggerType::Cron;
@@ -206,8 +204,7 @@ namespace AIAssistant
     // Triggers
     // ---------------------------------------------------------------------
 
-    bool WorkflowJsonParser::ParseTriggers(simdjson::ondemand::value& jsonValue,
-                                           std::vector<WorkflowTrigger>& triggersOut,
+    bool WorkflowJsonParser::ParseTriggers(simdjson::ondemand::value& jsonValue, std::vector<WorkflowTrigger>& triggersOut,
                                            std::string& errorMessage) const
     {
         if (!RequireArray(jsonValue, "triggers", errorMessage))
@@ -250,8 +247,7 @@ namespace AIAssistant
         return true;
     }
 
-    bool WorkflowJsonParser::ParseTrigger(simdjson::ondemand::object& jsonObject,
-                                          WorkflowTrigger& triggerOut,
+    bool WorkflowJsonParser::ParseTrigger(simdjson::ondemand::object& jsonObject, WorkflowTrigger& triggerOut,
                                           std::string& errorMessage) const
     {
         bool hasType = false;
@@ -339,8 +335,7 @@ namespace AIAssistant
     // ---------------------------------------------------------------------
 
     bool WorkflowJsonParser::ParseTasks(simdjson::ondemand::value& jsonValue,
-                                        std::unordered_map<std::string, TaskDef>& tasksOut,
-                                        std::string& errorMessage) const
+                                        std::unordered_map<std::string, TaskDef>& tasksOut, std::string& errorMessage) const
     {
         if (!RequireObject(jsonValue, "tasks", errorMessage))
         {
@@ -400,8 +395,7 @@ namespace AIAssistant
         return true;
     }
 
-    bool WorkflowJsonParser::ParseTask(simdjson::ondemand::object& jsonObject,
-                                       TaskDef& taskOut,
+    bool WorkflowJsonParser::ParseTask(simdjson::ondemand::object& jsonObject, TaskDef& taskOut,
                                        std::string& errorMessage) const
     {
         for (auto field : jsonObject)
@@ -603,8 +597,7 @@ namespace AIAssistant
         return true;
     }
 
-    bool WorkflowJsonParser::ParseTaskInputs(simdjson::ondemand::value& jsonValue,
-                                             TaskIOMap& inputsOut,
+    bool WorkflowJsonParser::ParseTaskInputs(simdjson::ondemand::value& jsonValue, TaskIOMap& inputsOut,
                                              std::string& errorMessage) const
     {
         if (!RequireObject(jsonValue, "task.inputs", errorMessage))
@@ -700,8 +693,7 @@ namespace AIAssistant
         return true;
     }
 
-    bool WorkflowJsonParser::ParseTaskOutputs(simdjson::ondemand::value& jsonValue,
-                                              TaskIOMap& outputsOut,
+    bool WorkflowJsonParser::ParseTaskOutputs(simdjson::ondemand::value& jsonValue, TaskIOMap& outputsOut,
                                               std::string& errorMessage) const
     {
         if (!RequireObject(jsonValue, "task.outputs", errorMessage))
@@ -797,8 +789,7 @@ namespace AIAssistant
         return true;
     }
 
-    bool WorkflowJsonParser::ParseTaskEnvironment(simdjson::ondemand::value& jsonValue,
-                                                  TaskEnvironment& environmentOut,
+    bool WorkflowJsonParser::ParseTaskEnvironment(simdjson::ondemand::value& jsonValue, TaskEnvironment& environmentOut,
                                                   std::string& errorMessage) const
     {
         if (!RequireObject(jsonValue, "task.environment", errorMessage))
@@ -893,8 +884,7 @@ namespace AIAssistant
         return true;
     }
 
-    bool WorkflowJsonParser::ParseTaskQueueBinding(simdjson::ondemand::value& jsonValue,
-                                                   QueueBinding& bindingOut,
+    bool WorkflowJsonParser::ParseTaskQueueBinding(simdjson::ondemand::value& jsonValue, QueueBinding& bindingOut,
                                                    std::string& errorMessage) const
     {
         if (!RequireObject(jsonValue, "task.queue_binding", errorMessage))
@@ -912,8 +902,7 @@ namespace AIAssistant
 
         simdjson::ondemand::object bindingObject = objectResult.value();
 
-        auto readStringArray = [&errorMessage](simdjson::ondemand::value& arrayValue,
-                                               std::vector<std::string>& output,
+        auto readStringArray = [&errorMessage](simdjson::ondemand::value& arrayValue, std::vector<std::string>& output,
                                                std::string const& context) -> bool
         {
             auto typeResult = arrayValue.type();
@@ -1011,8 +1000,7 @@ namespace AIAssistant
     // Dataflow
     // ---------------------------------------------------------------------
 
-    bool WorkflowJsonParser::ParseDataflow(simdjson::ondemand::value& jsonValue,
-                                           std::vector<DataflowDef>& dataflowsOut,
+    bool WorkflowJsonParser::ParseDataflow(simdjson::ondemand::value& jsonValue, std::vector<DataflowDef>& dataflowsOut,
                                            std::string& errorMessage) const
     {
         if (!RequireArray(jsonValue, "dataflow", errorMessage))
@@ -1055,8 +1043,7 @@ namespace AIAssistant
         return true;
     }
 
-    bool WorkflowJsonParser::ParseSingleDataflow(simdjson::ondemand::object& jsonObject,
-                                                 DataflowDef& dataflowOut,
+    bool WorkflowJsonParser::ParseSingleDataflow(simdjson::ondemand::object& jsonObject, DataflowDef& dataflowOut,
                                                  std::string& errorMessage) const
     {
         for (auto field : jsonObject)
@@ -1157,9 +1144,7 @@ namespace AIAssistant
             }
         }
 
-        if (dataflowOut.m_FromTask.empty() ||
-            dataflowOut.m_FromOutput.empty() ||
-            dataflowOut.m_ToTask.empty() ||
+        if (dataflowOut.m_FromTask.empty() || dataflowOut.m_FromOutput.empty() || dataflowOut.m_ToTask.empty() ||
             dataflowOut.m_ToInput.empty())
         {
             errorMessage = "dataflow entry missing required fields (from_task, from_output, to_task, to_input)";
@@ -1173,8 +1158,7 @@ namespace AIAssistant
     // Retries
     // ---------------------------------------------------------------------
 
-    bool WorkflowJsonParser::ParseRetries(simdjson::ondemand::object& jsonObject,
-                                          RetryPolicy& retryPolicyOut,
+    bool WorkflowJsonParser::ParseRetries(simdjson::ondemand::object& jsonObject, RetryPolicy& retryPolicyOut,
                                           std::string& errorMessage) const
     {
         for (auto field : jsonObject)

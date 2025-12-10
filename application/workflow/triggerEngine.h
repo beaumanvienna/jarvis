@@ -76,6 +76,10 @@ namespace AIAssistant
         // Registration API (called by Orchestrator after parsing JCWF)
         // --------------------------------------------------------------------
 
+        // Register an auto trigger.
+        // Auto triggers fire once immediately when registered (if enabled).
+        void AddAutoTrigger(std::string const& workflowId, std::string const& triggerId, bool isEnabled);
+
         // Register a cron trigger.
         // expression: 5-field cron string (minute hour day month weekday).
         // enabled: if false, trigger is stored but never fires.

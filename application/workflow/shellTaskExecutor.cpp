@@ -153,6 +153,7 @@ namespace AIAssistant
                 if (closeBraceIndex == std::string::npos)
                 {
                     // Malformed template.
+                    LOG_APP_ERROR("ShellTaskExecutor: Malformed template in argument '{}' (missing closing brace)", raw);
                     return false;
                 }
 
@@ -178,6 +179,8 @@ namespace AIAssistant
                         size_t index = static_cast<size_t>(std::stoul(indexString));
                         if (index >= taskDefinition.m_FileInputs.size())
                         {
+                            LOG_APP_ERROR("ShellTaskExecutor: input index {} out of range for '{}' in argument '{}'", index,
+                                          key, raw);
                             return false;
                         }
 
@@ -185,6 +188,7 @@ namespace AIAssistant
                     }
                     catch (...)
                     {
+                        LOG_APP_ERROR("ShellTaskExecutor: Failed to parse input index from '{}' in argument '{}'", key, raw);
                         return false;
                     }
                 }
@@ -197,6 +201,8 @@ namespace AIAssistant
                         size_t index = static_cast<size_t>(std::stoul(indexString));
                         if (index >= taskDefinition.m_FileOutputs.size())
                         {
+                            LOG_APP_ERROR("ShellTaskExecutor: output index {} out of range for '{}' in argument '{}'", index,
+                                          key, raw);
                             return false;
                         }
 
@@ -204,6 +210,8 @@ namespace AIAssistant
                     }
                     catch (...)
                     {
+                        LOG_APP_ERROR("ShellTaskExecutor: Failed to parse output index from '{}' in argument '{}'", key,
+                                      raw);
                         return false;
                     }
                 }
@@ -214,6 +222,7 @@ namespace AIAssistant
                     auto iterator = taskState.m_InputValues.find(slotName);
                     if (iterator == taskState.m_InputValues.end())
                     {
+                        LOG_APP_ERROR("ShellTaskExecutor: Unknown slot '{}' referenced in argument '{}'", slotName, raw);
                         return false;
                     }
 
@@ -231,12 +240,15 @@ namespace AIAssistant
                     else
                     {
                         // Missing env variable → expand as empty string.
+                        LOG_APP_WARN("ShellTaskExecutor: Environment variable '{}' not found for argument '{}'", envName,
+                                     raw);
                         replacement.clear();
                     }
                 }
                 else
                 {
                     // Unknown pattern.
+                    LOG_APP_ERROR("ShellTaskExecutor: Unknown template pattern '{}' in argument '{}'", key, raw);
                     return false;
                 }
 
@@ -358,20 +370,24 @@ namespace AIAssistant
         LOG_APP_INFO("[shell] Executing shell task '{}'", taskDefinition.m_Id);
 
         // ------------------------------------------------------------
-        // 1) Parse params JSON
+        // 1) Parse params JSON (simdjson::ondemand)
         // ------------------------------------------------------------
-        simdjson::dom::parser parser;
-        simdjson::dom::element params;
-
         if (taskDefinition.m_ParamsJson.empty())
         {
+            LOG_APP_ERROR("ShellTaskExecutor: Missing params JSON for task '{}'", taskDefinition.m_Id);
             taskState.m_State = TaskInstanceStateKind::Failed;
             taskState.m_LastErrorMessage = "ShellTaskExecutor: Missing params JSON";
             return false;
         }
 
-        if (parser.parse(taskDefinition.m_ParamsJson).get(params))
+        simdjson::ondemand::parser parser;
+        simdjson::padded_string padded(taskDefinition.m_ParamsJson);
+
+        auto params = parser.iterate(padded);
+        if (params.error() != simdjson::SUCCESS)
         {
+            LOG_APP_ERROR("ShellTaskExecutor: Invalid params JSON for task '{}': {}", taskDefinition.m_Id,
+                          simdjson::error_message(params.error()));
             taskState.m_State = TaskInstanceStateKind::Failed;
             taskState.m_LastErrorMessage = "ShellTaskExecutor: Invalid params JSON";
             return false;
@@ -382,27 +398,44 @@ namespace AIAssistant
         // ------------------------------------------------------------
         std::string commandPath;
 
-        if (auto commandElement = params["command"])
         {
-            auto view = commandElement.value().get_string();
-            if (view.error())
+            auto commandField = params["command"];
+
+            if (commandField.error() == simdjson::NO_SUCH_FIELD)
             {
+                LOG_APP_ERROR("ShellTaskExecutor: Missing 'command' field in params for task '{}'", taskDefinition.m_Id);
+                taskState.m_State = TaskInstanceStateKind::Failed;
+                taskState.m_LastErrorMessage = "ShellTaskExecutor: Missing 'command' field";
+                return false;
+            }
+
+            if (commandField.error() != simdjson::SUCCESS)
+            {
+                LOG_APP_ERROR("ShellTaskExecutor: Error accessing 'command' field in params for task '{}': {}",
+                              taskDefinition.m_Id, simdjson::error_message(commandField.error()));
                 taskState.m_State = TaskInstanceStateKind::Failed;
                 taskState.m_LastErrorMessage = "ShellTaskExecutor: Invalid 'command' field";
                 return false;
             }
 
-            commandPath = std::string(view.value());
-        }
-        else
-        {
-            taskState.m_State = TaskInstanceStateKind::Failed;
-            taskState.m_LastErrorMessage = "ShellTaskExecutor: Missing 'command' field";
-            return false;
+            std::string_view commandView;
+            auto commandGetError = commandField.get(commandView);
+            if (commandGetError != simdjson::SUCCESS)
+            {
+                LOG_APP_ERROR("ShellTaskExecutor: Failed to read 'command' as string for task '{}': {}", taskDefinition.m_Id,
+                              simdjson::error_message(commandGetError));
+                taskState.m_State = TaskInstanceStateKind::Failed;
+                taskState.m_LastErrorMessage = "ShellTaskExecutor: Invalid 'command' field";
+                return false;
+            }
+
+            commandPath.assign(commandView);
         }
 
         if (!ValidateScriptPath(commandPath))
         {
+            LOG_APP_ERROR("ShellTaskExecutor: Script path '{}' rejected for task '{}' (must start with 'scripts/')",
+                          commandPath, taskDefinition.m_Id);
             taskState.m_State = TaskInstanceStateKind::Failed;
             taskState.m_LastErrorMessage = "ShellTaskExecutor: Script path rejected (must start with 'scripts/')";
             return false;
@@ -423,27 +456,61 @@ namespace AIAssistant
         // ------------------------------------------------------------
         std::vector<std::string> rawArgs;
 
-        if (auto argsElement = params["args"])
         {
-            if (!argsElement.value().is_array())
-            {
-                taskState.m_State = TaskInstanceStateKind::Failed;
-                taskState.m_LastErrorMessage = "ShellTaskExecutor: 'args' must be an array if present";
-                return false;
-            }
+            auto argsField = params["args"];
 
-            for (auto entry : argsElement.value().get_array())
+            if (argsField.error() == simdjson::SUCCESS)
             {
-                auto view = entry.get_string();
-                if (view.error())
+                simdjson::ondemand::value argsValue = argsField.value();
+
+                // Ensure it's an array
+                auto typeResult = argsValue.type();
+                if (typeResult.error() != simdjson::SUCCESS || typeResult.value() != simdjson::ondemand::json_type::array)
                 {
+                    LOG_APP_ERROR("ShellTaskExecutor: 'args' field must be an array for task '{}'", taskDefinition.m_Id);
                     taskState.m_State = TaskInstanceStateKind::Failed;
-                    taskState.m_LastErrorMessage = "ShellTaskExecutor: Non-string value in 'args' array";
+                    taskState.m_LastErrorMessage = "ShellTaskExecutor: 'args' must be an array if present";
                     return false;
                 }
 
-                rawArgs.emplace_back(std::string(view.value()));
+                auto arrayResult = argsValue.get_array();
+                if (arrayResult.error() != simdjson::SUCCESS)
+                {
+                    LOG_APP_ERROR("ShellTaskExecutor: Failed to read 'args' array for task '{}': {}", taskDefinition.m_Id,
+                                  simdjson::error_message(arrayResult.error()));
+                    taskState.m_State = TaskInstanceStateKind::Failed;
+                    taskState.m_LastErrorMessage = "ShellTaskExecutor: 'args' must be an array if present";
+                    return false;
+                }
+
+                simdjson::ondemand::array argsArray = arrayResult.value();
+
+                for (simdjson::ondemand::value entry : argsArray)
+                {
+                    std::string_view argView;
+                    auto entryError = entry.get(argView);
+                    if (entryError != simdjson::SUCCESS)
+                    {
+                        LOG_APP_ERROR("ShellTaskExecutor: Non-string value in 'args' array for task '{}': {}",
+                                      taskDefinition.m_Id, simdjson::error_message(entryError));
+                        taskState.m_State = TaskInstanceStateKind::Failed;
+                        taskState.m_LastErrorMessage = "ShellTaskExecutor: Non-string value in 'args' array";
+                        return false;
+                    }
+
+                    rawArgs.emplace_back(argView);
+                }
             }
+            else if (argsField.error() != simdjson::NO_SUCH_FIELD)
+            {
+                // 'args' exists but is malformed at the top level
+                LOG_APP_ERROR("ShellTaskExecutor: Invalid 'args' field in params for task '{}': {}", taskDefinition.m_Id,
+                              simdjson::error_message(argsField.error()));
+                taskState.m_State = TaskInstanceStateKind::Failed;
+                taskState.m_LastErrorMessage = "ShellTaskExecutor: Invalid 'args' field";
+                return false;
+            }
+            // NO_SUCH_FIELD → no args → OK, just leave rawArgs empty
         }
 
         // Option B: inject default input/output macros if none are present.
@@ -460,6 +527,8 @@ namespace AIAssistant
             std::string expandedArgument;
             if (!ExpandTemplatesStrict(rawArgument, taskDefinition, taskState, expandedArgument))
             {
+                LOG_APP_ERROR("ShellTaskExecutor: Failed to expand argument template '{}' for task '{}'", rawArgument,
+                              taskDefinition.m_Id);
                 taskState.m_State = TaskInstanceStateKind::Failed;
                 taskState.m_LastErrorMessage = "ShellTaskExecutor: Failed to expand argument template '" + rawArgument + "'";
                 return false;
@@ -467,6 +536,8 @@ namespace AIAssistant
 
             if (!IsSafeArgument(expandedArgument))
             {
+                LOG_APP_ERROR("ShellTaskExecutor: Argument '{}' failed safety check for task '{}'", expandedArgument,
+                              taskDefinition.m_Id);
                 taskState.m_State = TaskInstanceStateKind::Failed;
                 taskState.m_LastErrorMessage =
                     "ShellTaskExecutor: Argument contains unsupported characters (safety check failed)";
@@ -490,6 +561,8 @@ namespace AIAssistant
 
         if (result != 0)
         {
+            LOG_APP_ERROR("ShellTaskExecutor: Shell command '{}' for task '{}' returned non-zero exit status {}",
+                          fullCommand, taskDefinition.m_Id, result);
             taskState.m_State = TaskInstanceStateKind::Failed;
             taskState.m_LastErrorMessage = "ShellTaskExecutor: Shell command returned non-zero exit status";
             return false;

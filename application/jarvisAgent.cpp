@@ -34,6 +34,8 @@
 #include "workflow/workflowRegistry.h"
 #include "workflow/workflowTriggerBinder.h"
 #include "workflow/workflowOrchestrator.h"
+#include "workflow/taskExecutorRegistry.h"
+#include "workflow/shellTaskExecutor.h"
 #include "workflow/triggerEngine.h"
 
 namespace AIAssistant
@@ -139,6 +141,24 @@ namespace AIAssistant
             }
         }
 
+        // ---------------------------------------------------------
+        // Register task executors
+        // ---------------------------------------------------------
+        {
+            TaskExecutorRegistry& executorRegistry = TaskExecutorRegistry::Get();
+
+            // Shell executor (TaskType::Shell)
+            {
+                std::shared_ptr<ITaskExecutor> shellExecutor = std::make_shared<ShellTaskExecutor>();
+                executorRegistry.RegisterExecutor(TaskType::Shell, shellExecutor);
+            }
+
+            // Later we can add:
+            //  - PythonTaskExecutor for TaskType::Python
+            //  - AiCallTaskExecutor for TaskType::AiCall
+            //  - InternalTaskExecutor for TaskType::Internal
+        }
+
         WorkflowOrchestrator::Get().SetRegistry(m_WorkflowRegistry.get());
 
         m_TriggerEngine = std::make_unique<TriggerEngine>(
@@ -147,8 +167,6 @@ namespace AIAssistant
                 LOG_APP_INFO("JarvisAgent: Trigger fired for workflow '{}' (trigger id '{}')", triggerEvent.m_WorkflowId,
                              triggerEvent.m_TriggerId);
 
-                // For now we run the workflow synchronously in this thread.
-                // Later this can be moved onto Core::g_Core->GetThreadPool().
                 bool const runOk = WorkflowOrchestrator::Get().RunWorkflowOnce(triggerEvent.m_WorkflowId);
 
                 if (!runOk)

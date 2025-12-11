@@ -117,9 +117,11 @@ namespace AIAssistant
         }
 
         simdjson::ondemand::parser parser;
+        simdjson::padded_string paddedJson(jsonContent);
         simdjson::ondemand::document document;
 
-        simdjson::error_code errorCode = parser.iterate(jsonContent).get(document);
+        simdjson::error_code errorCode = parser.iterate(paddedJson).get(document);
+
         if (errorCode)
         {
             errorMessage = "Failed to parse workflow JSON: ";

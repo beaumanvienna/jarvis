@@ -19,7 +19,7 @@
       },
       "params": {
         "command": "scripts/compile.sh",
-        "args": ["${inputs.source}", "${outputs.object}"]
+        "args": ["../workflows/${input[0]}", "../workflows/${output[0]}"]
       }
     },
 
@@ -37,7 +37,7 @@
       },
       "params": {
         "command": "scripts/compile.sh",
-        "args": ["${inputs.source}", "${outputs.object}"]
+        "args": ["../workflows/${input[0]}", "../workflows/${output[0]}"]
       }
     },
 
@@ -57,7 +57,11 @@
       },
       "params": {
         "command": "scripts/archive.sh",
-        "args": ["${inputs.obj1}", "${inputs.obj2}", "${outputs.archive}"]
+        "args": [
+          "../workflows/${input[0]}",
+          "../workflows/${input[1]}",
+          "../workflows/${output[0]}"
+        ]
       }
     },
 
@@ -75,7 +79,7 @@
       },
       "params": {
         "command": "scripts/compile.sh",
-        "args": ["${inputs.source}", "${outputs.object}"]
+        "args": ["../workflows/${input[0]}", "../workflows/${output[0]}"]
       }
     },
 
@@ -93,7 +97,7 @@
       },
       "params": {
         "command": "scripts/compile.sh",
-        "args": ["${inputs.source}", "${outputs.object}"]
+        "args": ["../workflows/${input[0]}", "../workflows/${output[0]}"]
       }
     },
 
@@ -114,7 +118,12 @@
       },
       "params": {
         "command": "scripts/link.sh",
-        "args": ["${inputs.main_obj}", "${inputs.app_obj}", "${inputs.archive}", "${outputs.exe}"]
+        "args": [
+          "../workflows/${input[0]}",
+          "../workflows/${input[1]}",
+          "../workflows/${input[2]}",
+          "../workflows/${output[0]}"
+        ]
       }
     }
   },

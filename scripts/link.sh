@@ -8,4 +8,5 @@ OUTPUT="$4"
 
 echo "[link] $MAIN_OBJ $APP_OBJ $ARCHIVE -> $OUTPUT"
 
-g++ -Wall -Wextra "$MAIN_OBJ" "$APP_OBJ" "$ARCHIVE" -o "$OUTPUT"
+g++ -Wall -Wextra "$MAIN_OBJ" "$APP_OBJ" "$ARCHIVE" -o "$OUTPUT" "${@:5}"
+

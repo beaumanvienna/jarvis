@@ -12,8 +12,8 @@
    The above copyright notice and this permission notice shall be
    included in all copies or substantial portions of the Software.
 
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <future>
 
 #include "core.h"
 #include "engine.h"
@@ -31,11 +32,273 @@
 #include "dataflowResolver.h"
 #include "taskExecutor.h"
 #include "taskExecutorRegistry.h"
+#include "taskFreshnessChecker.h"
 
 namespace fs = std::filesystem;
 
 namespace AIAssistant
 {
+    namespace
+    {
+        bool ResolveTemplateString(std::string const& value, std::unordered_map<std::string, std::string> const& inputValues,
+                                   std::unordered_map<std::string, std::string> const& outputValues,
+                                   std::string& outResolved)
+        {
+            outResolved.clear();
+            outResolved.reserve(value.size());
+
+            size_t pos = 0;
+
+            while (pos < value.size())
+            {
+                size_t const dollar = value.find("${", pos);
+                if (dollar == std::string::npos)
+                {
+                    outResolved.append(value.substr(pos));
+                    break;
+                }
+
+                outResolved.append(value.substr(pos, dollar - pos));
+
+                size_t const close = value.find('}', dollar + 2);
+                if (close == std::string::npos)
+                {
+                    return false;
+                }
+
+                std::string const token = value.substr(dollar + 2, close - (dollar + 2));
+
+                // Supported forms:
+                //  - inputs.<name>
+                //  - outputs.<name>
+                if (token.rfind("inputs.", 0) == 0)
+                {
+                    std::string const key = token.substr(7);
+                    auto iterator = inputValues.find(key);
+                    if (iterator == inputValues.end())
+                    {
+                        return false;
+                    }
+                    outResolved.append(iterator->second);
+                }
+                else if (token.rfind("outputs.", 0) == 0)
+                {
+                    std::string const key = token.substr(8);
+                    auto iterator = outputValues.find(key);
+                    if (iterator == outputValues.end())
+                    {
+                        return false;
+                    }
+                    outResolved.append(iterator->second);
+                }
+                else
+                {
+                    return false;
+                }
+
+                pos = close + 1;
+            }
+
+            // If unresolved templates remain, treat as not resolved.
+            if (outResolved.find("${") != std::string::npos)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        bool ResolveTemplatePathList(std::vector<std::string> const& templates,
+                                     std::unordered_map<std::string, std::string> const& inputValues,
+                                     std::unordered_map<std::string, std::string> const& outputValues,
+                                     std::vector<fs::path>& outPaths)
+        {
+            outPaths.clear();
+            outPaths.reserve(templates.size());
+
+            for (std::string const& t : templates)
+            {
+                std::string resolved;
+                if (!ResolveTemplateString(t, inputValues, outputValues, resolved))
+                {
+                    // If there are no templates at all, accept as literal path.
+                    if (t.find("${") == std::string::npos)
+                    {
+                        outPaths.emplace_back(t);
+                        continue;
+                    }
+                    return false;
+                }
+
+                if (resolved.empty())
+                {
+                    return false;
+                }
+
+                outPaths.emplace_back(resolved);
+            }
+
+            return true;
+        }
+
+        bool TryResolveTaskInputsForFreshness(WorkflowDefinition const& workflowDefinition, WorkflowRun const& workflowRun,
+                                              TaskDef const& taskDefinition, std::string const& taskId,
+                                              std::unordered_map<std::string, std::string>& outInputValues)
+        {
+            DataflowResolver dataflowResolver;
+
+            std::optional<TaskResolvedInputs> optionalResolvedInputs =
+                dataflowResolver.ResolveInputsForTask(workflowDefinition, workflowRun, taskDefinition, taskId);
+
+            if (!optionalResolvedInputs.has_value())
+            {
+                return false;
+            }
+
+            outInputValues = optionalResolvedInputs.value().m_StringValues;
+            return true;
+        }
+
+        bool ResolveFreshnessPathsForTask(WorkflowDefinition const& workflowDefinition, WorkflowRun const& workflowRun,
+                                          TaskDef const& taskDefinition, std::string const& taskId,
+                                          std::vector<fs::path>& outInputPaths, std::vector<fs::path>& outOutputPaths)
+        {
+            auto hasTemplatePrefix = [](std::vector<std::string> const& values, std::string const& prefix) -> bool
+            {
+                for (std::string const& value : values)
+                {
+                    if (value.find(prefix) != std::string::npos)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            // Only resolve task "inputs" if file_inputs/file_outputs actually reference ${inputs.*}.
+            // This prevents DataflowResolver from failing (and spamming logs) for tasks whose declared
+            // inputs are required for execution but irrelevant for freshness checks when paths are literal.
+            bool const needsInputResolution = hasTemplatePrefix(taskDefinition.m_FileInputs, "${inputs.") ||
+                                              hasTemplatePrefix(taskDefinition.m_FileOutputs, "${inputs.");
+
+            std::unordered_map<std::string, std::string> inputValues;
+            if (needsInputResolution)
+            {
+                if (!TryResolveTaskInputsForFreshness(workflowDefinition, workflowRun, taskDefinition, taskId, inputValues))
+                {
+                    return false;
+                }
+            }
+
+            // For freshness checks we can only reliably substitute outputs if they are already known.
+            // (For skipped tasks m_OutputValues is typically empty; in that case output template resolution
+            // may fail and we conservatively treat the task as not up to date.)
+            std::unordered_map<std::string, std::string> outputValues;
+
+            auto stateIterator = workflowRun.m_TaskStates.find(taskId);
+            if (stateIterator != workflowRun.m_TaskStates.end())
+            {
+                outputValues = stateIterator->second.m_OutputValues;
+            }
+
+            if (!ResolveTemplatePathList(taskDefinition.m_FileInputs, inputValues, outputValues, outInputPaths))
+            {
+                return false;
+            }
+
+            if (!ResolveTemplatePathList(taskDefinition.m_FileOutputs, inputValues, outputValues, outOutputPaths))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        // ---------------------------------------------------------
+        // When a task is skipped due to freshness, we still want its
+        // "logical" outputs to be available for downstream dataflow.
+        //
+        // Otherwise you get logs like:
+        //   DataflowResolver: output 'object' not found in task 'compile_lib2' ...
+        //
+        // Convention (deterministic):
+        //   * We derive a mapping from declared output slots -> resolved file_outputs.
+        //   * If slot_count == path_count: zip by sorted slot name order.
+        //   * Else if path_count == 1: map all slots to that one path.
+        //   * Else if slot_count == 1: map that slot to the first path.
+        //
+        // If we cannot resolve file_outputs, we leave outputs empty and
+        // downstream dataflow may still fail (as it should).
+        // ---------------------------------------------------------
+        void PopulateSkippedTaskOutputsIfPossible(WorkflowDefinition const& workflowDefinition,
+                                                  WorkflowRun const& workflowRun, TaskDef const& taskDefinition,
+                                                  std::string const& taskId, TaskInstanceState& taskState)
+        {
+            std::vector<fs::path> unusedInputPaths;
+            std::vector<fs::path> resolvedOutputPaths;
+
+            if (!ResolveFreshnessPathsForTask(workflowDefinition, workflowRun, taskDefinition, taskId, unusedInputPaths,
+                                              resolvedOutputPaths))
+            {
+                return;
+            }
+
+            if (taskDefinition.m_Outputs.empty() || resolvedOutputPaths.empty())
+            {
+                return;
+            }
+
+            std::vector<std::string> outputSlotNames;
+            outputSlotNames.reserve(taskDefinition.m_Outputs.size());
+
+            for (auto const& outputPair : taskDefinition.m_Outputs)
+            {
+                outputSlotNames.push_back(outputPair.first);
+            }
+
+            std::sort(outputSlotNames.begin(), outputSlotNames.end());
+
+            if (outputSlotNames.size() == resolvedOutputPaths.size())
+            {
+                for (size_t index = 0; index < outputSlotNames.size(); ++index)
+                {
+                    taskState.m_OutputValues[outputSlotNames[index]] = resolvedOutputPaths[index].string();
+                }
+            }
+            else if (resolvedOutputPaths.size() == 1)
+            {
+                std::string const onlyPath = resolvedOutputPaths[0].string();
+                for (std::string const& slotName : outputSlotNames)
+                {
+                    taskState.m_OutputValues[slotName] = onlyPath;
+                }
+            }
+            else if (outputSlotNames.size() == 1)
+            {
+                taskState.m_OutputValues[outputSlotNames[0]] = resolvedOutputPaths[0].string();
+            }
+            else
+            {
+                // Ambiguous mapping; do not guess.
+                return;
+            }
+
+            // Keep UI summary fields consistent with executed tasks.
+            {
+                std::string summary;
+                for (auto const& p : taskState.m_OutputValues)
+                {
+                    summary += p.first;
+                    summary += "=";
+                    summary += p.second;
+                    summary += ";";
+                }
+                taskState.m_OutputsJson = summary;
+            }
+        }
+
+    } // namespace
+
     WorkflowOrchestrator& WorkflowOrchestrator::Get()
     {
         static WorkflowOrchestrator instance;
@@ -244,13 +507,54 @@ namespace AIAssistant
                 continue;
             }
 
-            // Up-to-date check
-            if (IsTaskUpToDate(workflowDefinition, taskDefinition))
+            // Up-to-date check (Makefile semantics, with template resolution)
             {
-                LOG_APP_INFO("WorkflowOrchestrator: Task '{}' is up to date → skipped", taskId);
-                taskState->m_State = TaskInstanceStateKind::Skipped;
-                outMadeProgress = true;
-                continue;
+                TaskFreshnessChecker freshnessChecker;
+                TaskFreshnessChecker::ResolvedPaths resolvedPaths;
+
+                if (ResolveFreshnessPathsForTask(workflowDefinition, workflowRun, taskDefinition, taskId,
+                                                 resolvedPaths.m_InputPaths, resolvedPaths.m_OutputPaths))
+                {
+                    auto resolveUpstreamOutputs = [&](std::string const& upstreamTaskId,
+                                                      std::vector<fs::path>& outPaths) -> bool
+                    {
+                        auto upstreamIt = workflowDefinition.m_Tasks.find(upstreamTaskId);
+                        if (upstreamIt == workflowDefinition.m_Tasks.end())
+                        {
+                            return false;
+                        }
+
+                        std::vector<fs::path> unusedInputs;
+                        std::vector<fs::path> outputPaths;
+
+                        if (!ResolveFreshnessPathsForTask(workflowDefinition, workflowRun, upstreamIt->second,
+                                                          upstreamTaskId, unusedInputs, outputPaths))
+                        {
+                            return false;
+                        }
+
+                        outPaths = outputPaths;
+                        return true;
+                    };
+
+                    if (freshnessChecker.IsTaskUpToDate(workflowDefinition, taskId, resolvedPaths, resolveUpstreamOutputs))
+                    {
+                        LOG_APP_INFO("WorkflowOrchestrator: Task '{}' is up to date → skipped", taskId);
+
+                        // NEW: populate outputs for skipped tasks so downstream dataflow can resolve.
+                        PopulateSkippedTaskOutputsIfPossible(workflowDefinition, workflowRun, taskDefinition, taskId,
+                                                             *taskState);
+
+                        taskState->m_State = TaskInstanceStateKind::Skipped;
+                        outMadeProgress = true;
+                        continue;
+                    }
+                }
+                else
+                {
+                    // If we cannot resolve file templates for freshness checks,
+                    // we conservatively treat the task as not up to date.
+                }
             }
 
             // Task is ready to run in this wave
@@ -287,16 +591,19 @@ namespace AIAssistant
             auto defIt = workflowDefinition.m_Tasks.find(taskId);
             TaskDef const& taskDefinition = defIt->second;
 
+            // Mark as running before dispatch (attempt count is incremented inside ExecuteTaskInstance()).
             taskState->m_State = TaskInstanceStateKind::Running;
-            ++taskState->m_AttemptCount;
 
-            futures.push_back(TaskFuture{taskId, taskState,
-                                         pool.SubmitTask(
-                                             [&, taskId, taskDefinition]() -> bool
-                                             {
-                                                 return TaskExecutorRegistry::Get().Execute(workflowDefinition, workflowRun,
-                                                                                            taskDefinition, *taskState);
-                                             })});
+            TaskInstanceState* const capturedTaskState = taskState;
+
+            futures.push_back(
+                TaskFuture{taskId, capturedTaskState,
+                           pool.SubmitTask(
+                               [this, &workflowDefinition, &workflowRun, taskId, taskDefinition, capturedTaskState]() -> bool
+                               {
+                                   return ExecuteTaskInstance(workflowDefinition, workflowRun, taskDefinition, taskId,
+                                                              *capturedTaskState);
+                               })});
         }
 
         // ---------------------------------------------------------
@@ -323,7 +630,9 @@ namespace AIAssistant
             }
             else
             {
-                if (tf.state->m_State != TaskInstanceStateKind::Succeeded)
+                // Do not override Skipped.
+                if (tf.state->m_State != TaskInstanceStateKind::Succeeded &&
+                    tf.state->m_State != TaskInstanceStateKind::Skipped)
                 {
                     tf.state->m_State = TaskInstanceStateKind::Succeeded;
                 }
@@ -351,169 +660,6 @@ namespace AIAssistant
 
             TaskInstanceStateKind dependencyState = iterator->second.m_State;
             if (dependencyState != TaskInstanceStateKind::Succeeded && dependencyState != TaskInstanceStateKind::Skipped)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    bool WorkflowOrchestrator::IsTaskUpToDate(WorkflowDefinition const& workflowDefinition,
-                                              TaskDef const& taskDefinition) const
-    {
-        // If the task has no declared outputs, treat it as not provably up to date
-        // and re-run it whenever its dependencies are satisfied.
-        if (taskDefinition.m_FileOutputs.empty())
-        {
-            return false;
-        }
-
-        std::error_code errorCode;
-
-        // ---------------------------------------------------------
-        // 1) Collect timestamps for this task's own declared inputs
-        // ---------------------------------------------------------
-        std::vector<fs::file_time_type> inputTimes;
-
-        for (std::string const& inputPath : taskDefinition.m_FileInputs)
-        {
-            fs::path path(inputPath);
-            if (!fs::exists(path, errorCode))
-            {
-                // Missing input ⇒ not up to date.
-                return false;
-            }
-
-            auto writeTime = fs::last_write_time(path, errorCode);
-            if (errorCode)
-            {
-                LOG_APP_WARN("WorkflowOrchestrator::IsTaskUpToDate: Failed to get last_write_time for input '{}' : {}",
-                             inputPath, errorCode.message());
-                return false;
-            }
-
-            inputTimes.push_back(writeTime);
-        }
-
-        // ---------------------------------------------------------
-        // 2) Collect timestamps for all upstream outputs (transitively)
-        // ---------------------------------------------------------
-        if (!taskDefinition.m_DependsOn.empty())
-        {
-            std::unordered_set<std::string> visitedTasks;
-            std::vector<fs::file_time_type> upstreamTimes;
-
-            for (std::string const& dependencyId : taskDefinition.m_DependsOn)
-            {
-                if (!CollectUpstreamOutputTimes(workflowDefinition, dependencyId, visitedTasks, upstreamTimes))
-                {
-                    // If upstream outputs are missing or unreadable, we err on the
-                    // side of *not* considering this task up to date.
-                    return false;
-                }
-            }
-
-            inputTimes.insert(inputTimes.end(), upstreamTimes.begin(), upstreamTimes.end());
-        }
-
-        if (inputTimes.empty())
-        {
-            // No inputs and no upstream outputs => cannot prove freshness.
-            return false;
-        }
-
-        fs::file_time_type latestInputTime = *std::max_element(inputTimes.begin(), inputTimes.end());
-
-        // ---------------------------------------------------------
-        // 3) Collect timestamps for this task's outputs
-        // ---------------------------------------------------------
-        std::vector<fs::file_time_type> outputTimes;
-        outputTimes.reserve(taskDefinition.m_FileOutputs.size());
-
-        for (std::string const& outputPath : taskDefinition.m_FileOutputs)
-        {
-            fs::path path(outputPath);
-            if (!fs::exists(path, errorCode))
-            {
-                // An output is missing ⇒ not up to date.
-                return false;
-            }
-
-            auto writeTime = fs::last_write_time(path, errorCode);
-            if (errorCode)
-            {
-                LOG_APP_WARN("WorkflowOrchestrator::IsTaskUpToDate: Failed to get last_write_time for output '{}' : {}",
-                             outputPath, errorCode.message());
-                return false;
-            }
-
-            outputTimes.push_back(writeTime);
-        }
-
-        if (outputTimes.empty())
-        {
-            return false;
-        }
-
-        fs::file_time_type earliestOutputTime = *std::min_element(outputTimes.begin(), outputTimes.end());
-
-        // Makefile-style rule extended with upstream outputs:
-        // Task is up to date if all outputs exist and the oldest output
-        // is >= the newest input or upstream output.
-        bool const isUpToDate = (earliestOutputTime >= latestInputTime);
-        return isUpToDate;
-    }
-
-    bool WorkflowOrchestrator::CollectUpstreamOutputTimes(WorkflowDefinition const& workflowDefinition,
-                                                          std::string const& taskId,
-                                                          std::unordered_set<std::string>& visitedTasks,
-                                                          std::vector<fs::file_time_type>& outTimes) const
-    {
-        std::error_code errorCode;
-
-        // Avoid infinite recursion in case validation was skipped.
-        if (visitedTasks.contains(taskId))
-        {
-            return true;
-        }
-        visitedTasks.insert(taskId);
-
-        auto definitionIterator = workflowDefinition.m_Tasks.find(taskId);
-        if (definitionIterator == workflowDefinition.m_Tasks.end())
-        {
-            LOG_APP_ERROR("WorkflowOrchestrator::CollectUpstreamOutputTimes: Unknown task '{}'", taskId);
-            return false;
-        }
-
-        TaskDef const& taskDefinition = definitionIterator->second;
-
-        // Collect this task's own outputs if any.
-        for (std::string const& outputPath : taskDefinition.m_FileOutputs)
-        {
-            fs::path path(outputPath);
-            if (!fs::exists(path, errorCode))
-            {
-                // Upstream output is missing: downstream tasks cannot
-                // reliably be up to date.
-                return false;
-            }
-
-            auto writeTime = fs::last_write_time(path, errorCode);
-            if (errorCode)
-            {
-                LOG_APP_WARN("WorkflowOrchestrator::CollectUpstreamOutputTimes: Failed to get last_write_time for '{}' : {}",
-                             outputPath, errorCode.message());
-                return false;
-            }
-
-            outTimes.push_back(writeTime);
-        }
-
-        // Recurse into dependencies (transitive closure).
-        for (std::string const& dependencyId : taskDefinition.m_DependsOn)
-        {
-            if (!CollectUpstreamOutputTimes(workflowDefinition, dependencyId, visitedTasks, outTimes))
             {
                 return false;
             }

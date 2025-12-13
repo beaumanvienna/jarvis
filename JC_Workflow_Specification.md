@@ -1,4 +1,4 @@
-# JC Workflow File Format (extension jcwf)
+# JC Workflow File Format™ (extension jcwf)
 
 Copyright (c) 2025 JC Technolabs<br>
 License: GPL-3.0
@@ -7,7 +7,7 @@ License: GPL-3.0
 
 ## Abstract
 
-This document specifies the **JC Workflow File format (JCWF)** and the corresponding execution model for **JarvisAgent**.  
+This document specifies the **JC Workflow File Format™ (JCWF)** and the corresponding execution model for **JarvisAgent**.  
 JCWF is a **JSON-based** workflow description language that allows JarvisAgent to:
 
 - Define workflows as graphs of tasks (a workflow pipeline).
@@ -312,6 +312,13 @@ Each task has:
   }
   ```
 
+  **Argument templating (positional file arguments):**
+
+  - If a shell task declares `file_inputs` and/or `file_outputs`, the runtime MUST provide positional template variables:
+    - `${input[i]}` expands to the resolved path of `file_inputs[i]`
+    - `${output[i]}` expands to the resolved path of `file_outputs[i]`
+  - `args` MAY include additional literal flags (for example `"-O3"`) alongside `${input[i]}` / `${output[i]}`.
+
 - `ai_call`  
   A high-level “call AI” task that routes via Python or C++ backend.
 
@@ -323,7 +330,8 @@ Each task has:
       "provider": "openai",
       "model": "gpt-4.1-mini",
       "mode": "one_shot",  // or "assistant"
-      "prompt_template": "Summarize the following report:\n{{report_text}}"
+      "prompt_template": "Summarize the following report:
+{{report_text}}"
     },
     "inputs": {
       "report_text": { "type": "string" }
@@ -399,6 +407,13 @@ Inputs and outputs are declared to aid validation and UI:
 
 - Each key is a data slot name.  
 - Types are advisory but useful for sanity checks and editor tooling.
+
+**Relationship to `file_inputs` / `file_outputs`:**
+
+- `inputs` / `outputs` describe **named data slots** for validation and `dataflow` wiring.  
+- `file_inputs` / `file_outputs` describe **file dependencies** for freshness checks and (for shell tasks) positional argument templating via `${input[i]}` / `${output[i]}`.
+- A shell task MAY omit `inputs` entirely and still run, as long as its `params` are resolvable (for example, only using `${input[i]}` / `${output[i]}`).
+- When a task defines named `outputs` and also defines `file_outputs`, the runtime MAY populate output slot values with the corresponding `file_outputs` paths (commonly the first output slot maps to `file_outputs[0]`) to support `dataflow` wiring in Makefile-style workflows.
 
 #### 3.3.5 Clean Tasks
 
@@ -504,6 +519,7 @@ Rules:
      - Each `file_output` has a modification time newer than or equal to every `file_input` and all upstream outputs from `depends_on` tasks.  
    - If any `file_output` is missing, or any `file_input` or upstream output is newer, the task is considered stale and MUST run.  
    - If `file_inputs` or `file_outputs` are omitted, the engine MUST assume the task is not up to date and SHOULD run it whenever its dependencies are satisfied.
+   - If a task is skipped as “up to date”, the runtime SHOULD treat it as successful and its `file_outputs` MUST be considered available to downstream tasks (for both readiness and freshness comparisons).
 
 3. Per-item mode  
    - For `mode: "per_item"` tasks, the same freshness rules apply per item.  
@@ -542,7 +558,7 @@ Optional explicit wiring of outputs to inputs.
 
 Semantics:
 
-- The runtime MUST ensure that the source task has completed and produced the referenced output before starting the target task.  
+- The runtime MUST ensure that the source task has completed (or was skipped as up to date) and produced the referenced output before starting the target task.  
 - For `per_item` tasks, dataflow can create fan-out: one `load_xls` task to many `summarize_section` tasks.
 
 If `dataflow` is omitted, tasks may rely purely on the workflow state (context) or external files.
@@ -583,7 +599,7 @@ This section describes how JarvisAgent should execute JCWF workflows across the 
 4. On trigger activation (cron, file, structure, manual):  
    - Create a workflow run instance with its own ID and context.  
    - Resolve ready tasks:  
-     - All `depends_on` tasks succeeded, and  
+     - All `depends_on` tasks succeeded (or were skipped as up to date), and  
      - Inputs are resolvable, and  
      - The task is not up to date (or up-to-date checking is disabled).  
    - Schedule tasks on worker pools and/or Python engines.  
@@ -698,7 +714,7 @@ Data exchange between C++ and the web UI is via:
 
 A task instance is ready to execute when:
 
-1. All tasks in its `depends_on` list have succeeded.  
+1. All tasks in its `depends_on` list have succeeded (or were skipped as up to date).  
 2. All its declared required inputs are resolvable from one of:  
    - Dataflow links,  
    - Workflow context, or  
@@ -783,6 +799,8 @@ When a task starts, its inputs are resolved from:
 
 If a required input cannot be resolved, the task MUST fail fast with a validation error.
 
+**Note (shell tasks):** `${input[i]}` / `${output[i]}` template expansion is based on `file_inputs` / `file_outputs` and does not require named `inputs` / `outputs` declarations.
+
 ### 8.2 Outputs and Context
 
 Task outputs MAY be written to:
@@ -807,7 +825,7 @@ Below is a simplified JSON Schema for JCWF v1.0. It is not exhaustive but is sui
   "properties": {
     "version": {
       "type": "string",
-      "pattern": "^1\\.0$"
+      "pattern": "^1\.0$"
     },
     "id": { "type": "string" },
     "label": { "type": "string" },

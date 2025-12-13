@@ -25,9 +25,13 @@
 #include "workflowRegistry.h"
 #include "workflowJsonParser.h"
 
-#include <unordered_set>
-#include <functional>
+#include <filesystem>
 #include <fstream>
+#include <functional>
+#include <optional>
+#include <string>
+#include <unordered_set>
+#include <vector>
 
 namespace AIAssistant
 {
@@ -52,7 +56,7 @@ namespace AIAssistant
                 continue;
             }
 
-            auto const& path = entry.path();
+            std::filesystem::path const& path = entry.path();
             if (path.extension() == ".jcwf")
             {
                 LOG_APP_INFO("Loading workflow file {}", path.string());
@@ -73,16 +77,19 @@ namespace AIAssistant
     // ------------------------------------------------------------
     bool WorkflowRegistry::LoadFile(std::filesystem::path const& filePath)
     {
-        LOG_APP_INFO("WorkflowRegistry::LoadFile {}", filePath.string());
+        std::filesystem::path const absoluteFilePath = std::filesystem::absolute(filePath);
+        std::filesystem::path const workflowDirectory = absoluteFilePath.parent_path();
 
-        std::ifstream file(filePath);
+        LOG_APP_INFO("WorkflowRegistry::LoadFile {}", absoluteFilePath.string());
+
+        std::ifstream file(absoluteFilePath);
         if (!file.is_open())
         {
-            LOG_APP_ERROR("Failed to open {}", filePath.string());
+            LOG_APP_ERROR("Failed to open {}", absoluteFilePath.string());
             return false;
         }
 
-        std::string jsonContent((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::string const jsonContent((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
         WorkflowDefinition definition;
         std::string errorMessage;
@@ -90,7 +97,7 @@ namespace AIAssistant
         WorkflowJsonParser parser;
         if (!parser.ParseWorkflowJson(jsonContent, definition, errorMessage))
         {
-            LOG_APP_ERROR("WorkflowJsonParser failed for {}: {}", filePath.string(), errorMessage);
+            LOG_APP_ERROR("WorkflowJsonParser failed for {}: {}", absoluteFilePath.string(), errorMessage);
             return false;
         }
 
@@ -102,18 +109,64 @@ namespace AIAssistant
             return false;
         }
 
+        // ------------------------------------------------------------
+        // Root path-like fields at the JCWF directory.
+        //
+        // Important: Only root *literal* relative paths.
+        // If the string contains a template (${...}), do not rewrite it here,
+        // because it may resolve to an absolute path at runtime.
+        // ------------------------------------------------------------
+        auto rewriteLiteralPathsInPlace = [&](std::vector<std::string>& paths)
+        {
+            for (std::string& raw : paths)
+            {
+                if (raw.empty())
+                {
+                    continue;
+                }
+
+                if (raw.find("${") != std::string::npos)
+                {
+                    continue;
+                }
+
+                std::filesystem::path const pathCandidate(raw);
+
+                // Leave absolute paths untouched.
+                if (pathCandidate.is_absolute())
+                {
+                    continue;
+                }
+
+                std::filesystem::path const rooted = (workflowDirectory / pathCandidate).lexically_normal();
+                raw = rooted.string();
+            }
+        };
+
+        for (auto& taskPair : definition.m_Tasks)
+        {
+            TaskDef& taskDefinition = taskPair.second;
+
+            rewriteLiteralPathsInPlace(taskDefinition.m_FileInputs);
+            rewriteLiteralPathsInPlace(taskDefinition.m_FileOutputs);
+
+            rewriteLiteralPathsInPlace(taskDefinition.m_QueueBinding.m_StngFiles);
+            rewriteLiteralPathsInPlace(taskDefinition.m_QueueBinding.m_TaskFiles);
+            rewriteLiteralPathsInPlace(taskDefinition.m_QueueBinding.m_CnxtFiles);
+        }
+
         // reload warning or normal load
         if (m_Workflows.contains(definition.m_Id))
         {
             LOG_APP_WARN("Workflow {} already exists; reloading.", definition.m_Id);
         }
 
-        auto id = definition.m_Id;
+        std::string const id = definition.m_Id;
 
         // Use the workflow id as the map key; do not look up by filename stem.
         LOG_APP_INFO("Registered workflow {}", id);
 
-        m_Workflows[definition.m_Id] = std::move(definition);
+        m_Workflows[id] = std::move(definition);
 
         return true;
     }
@@ -125,12 +178,12 @@ namespace AIAssistant
 
     std::optional<WorkflowDefinition> WorkflowRegistry::GetWorkflow(std::string const& workflowId) const
     {
-        auto it = m_Workflows.find(workflowId);
-        if (it == m_Workflows.end())
+        auto iterator = m_Workflows.find(workflowId);
+        if (iterator == m_Workflows.end())
         {
             return std::nullopt;
         }
-        return it->second;
+        return iterator->second;
     }
 
     std::vector<std::string> WorkflowRegistry::GetWorkflowIds() const
@@ -142,6 +195,7 @@ namespace AIAssistant
         {
             ids.push_back(key);
         }
+
         return ids;
     }
 
@@ -316,7 +370,7 @@ namespace AIAssistant
             // Validate output slot existence
             if (!df.m_FromOutput.empty())
             {
-                auto const& taskFrom = wf.m_Tasks.at(df.m_FromTask);
+                TaskDef const& taskFrom = wf.m_Tasks.at(df.m_FromTask);
                 if (!taskFrom.m_Outputs.contains(df.m_FromOutput))
                 {
                     LOG_APP_ERROR("Workflow {} dataflow: from_task '{}' has no output slot '{}'", wf.m_Id, df.m_FromTask,
@@ -328,7 +382,7 @@ namespace AIAssistant
             // Validate input slot existence
             if (!df.m_ToInput.empty())
             {
-                auto const& taskTo = wf.m_Tasks.at(df.m_ToTask);
+                TaskDef const& taskTo = wf.m_Tasks.at(df.m_ToTask);
                 if (!taskTo.m_Inputs.contains(df.m_ToInput))
                 {
                     LOG_APP_ERROR("Workflow {} dataflow: to_task '{}' has no input slot '{}'", wf.m_Id, df.m_ToTask,
@@ -364,8 +418,8 @@ namespace AIAssistant
 
             visiting.insert(taskId);
 
-            auto const& task = wf.m_Tasks.at(taskId);
-            for (auto const& dep : task.m_DependsOn)
+            TaskDef const& task = wf.m_Tasks.at(taskId);
+            for (std::string const& dep : task.m_DependsOn)
             {
                 if (dfs(dep))
                 {

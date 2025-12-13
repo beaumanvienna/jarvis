@@ -84,12 +84,6 @@ namespace AIAssistant
         bool IsTaskReady(WorkflowDefinition const& workflowDefinition, WorkflowRun const& workflowRun,
                          TaskDef const& taskDefinition) const;
 
-        bool IsTaskUpToDate(WorkflowDefinition const& workflowDefinition, TaskDef const& taskDefinition) const;
-
-        bool CollectUpstreamOutputTimes(WorkflowDefinition const& workflowDefinition, std::string const& taskId,
-                                        std::unordered_set<std::string>& visitedTasks,
-                                        std::vector<std::filesystem::file_time_type>& outTimes) const;
-
         bool ExecuteTaskInstance(WorkflowDefinition const& workflowDefinition, WorkflowRun& workflowRun,
                                  TaskDef const& taskDefinition, std::string const& taskId, TaskInstanceState& taskState);
 

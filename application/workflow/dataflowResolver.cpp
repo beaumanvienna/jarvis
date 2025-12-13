@@ -39,6 +39,7 @@ namespace AIAssistant
         for (auto const& inputPair : taskDefinition.m_Inputs)
         {
             std::string const& inputName = inputPair.first;
+            TaskIOField const& inputField = inputPair.second;
 
             std::string resolvedValue;
 
@@ -53,9 +54,14 @@ namespace AIAssistant
 
             // 3) TODO: defaults / literals (JCWF-level) if introduced.
 
-            // If not resolved by any mechanism → fail for now.
-            LOG_APP_ERROR("DataflowResolver: Missing input '{}' for task '{}'", inputName, taskId);
-            return std::nullopt;
+            // If not resolved by any mechanism:
+            //  - required input -> fail
+            //  - optional input -> simply omit it
+            if (inputField.m_IsRequired)
+            {
+                LOG_APP_ERROR("DataflowResolver: Missing input '{}' for task '{}'", inputName, taskId);
+                return std::nullopt;
+            }
         }
 
         // Step 2: expand templates inside resolved values (e.g. ${inputs.section_title})

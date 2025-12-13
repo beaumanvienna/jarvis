@@ -308,3 +308,314 @@ Practical implication for `make-example`:
      - `make_executable`
   6. Shell executor runs each task’s `command + args` as an external process (unless the task is skipped as up-to-date).
   7. On success of all tasks, run is marked as complete.
+## 7. Queue artifacts that generated the JCWF (STNG / CNTX / TASK / PROB)
+
+When JarvisAgent generated `make_example.jcwf`, it did so from the standard queue inputs:
+
+- **STNG_**: style / behavior rules for the model output
+- **CNTX_**: background context (here: the JCWF specification)
+- **TASK_**: the concrete instruction (“generate a Makefile-style build workflow”)
+- **PROB_**: the problem statement and the produced output
+
+Below are the captured file contents from `../queue/` (with `CNTX_jcwf_spec.txt` intentionally truncated as requested).
+
+### 7.1 `STNG_technical_tone.txt`
+
+```text
+STNG_technical_tone.txt
+Technical tone and behavior rules:
+
+- Write in a precise, technical tone.
+- Be concise, but do not omit critical details.
+- Prefer structured output: short sections, bullet lists, and code blocks.
+- If something is unknown or ambiguous, say so explicitly and ask for the missing info.
+- Do not guess, embellish, or invent behavior/features.
+- Use exact filenames, commands, and JSON fields when referencing them.
+- For code: prefer C++20 examples, Allman braces, and do not omit braces for single-line if-statements.
+
+Output format preference:
+- When asked to generate a JCWF file, output valid JSON only (no surrounding markdown).
+```
+
+### 7.2 `CNTX_jcwf_spec.txt` (excerpt)
+
+```text
+CNTX_jcwf_spec.txt
+This file contains the current JC Workflow File Format (JCWF) specification used by JarvisAgent.
+
+# JC Workflow File Format™ (extension jcwf)
+
+Copyright (c) 2025 JC Technolabs<br>
+License: GPL-3.0
+
+[..]
+```
+
+### 7.3 `TASK_generate_jcwf_make_example.txt`
+
+```text
+TASK_generate_jcwf_make_example.txt
+Create a JC Workflow File (JCWF) JSON document that represents a Makefile-style build for the example files:
+
+- Compile: lib1.cpp -> lib1.o
+- Compile: lib2.cpp -> lib2.o
+- Archive: lib1.o + lib2.o -> libmylib.a
+- Compile: main.cpp -> main.o
+- Compile: app.cpp -> app.o
+- Link: main.o + app.o + libmylib.a -> myapp
+
+Requirements:
+- The workflow MUST follow the JCWF specification provided in CNTX.
+- Use shell tasks and the scripts:
+  - scripts/compile.sh
+  - scripts/archive.sh
+  - scripts/link.sh
+- Use file_inputs / file_outputs for freshness checks.
+- Use dataflow to wire task outputs into downstream task inputs, as in the working make_example.jcwf pattern:
+  - compile_* tasks expose output slot "object"
+  - archive task exposes output slot "archive"
+- For the archive and link tasks, declare named required inputs (obj1/obj2 and main_obj/app_obj/archive) that are satisfied via dataflow.
+- Include compiler optimization "-O3" for compilation and linking:
+  - Either pass it via params.args (recommended) or document an equivalent mechanism that works with the scripts.
+- Keep paths relative (e.g., lib1.cpp, lib1.o, myapp).
+- Output: valid JSON only.
+
+Do not include explanations, only the JCWF JSON.
+```
+
+### 7.4 `PROB_make_process_context.txt`
+
+```text
+PROB_make_process_context.txt
+Define the make/build process for the example files based on the following documentation.
+
+---
+# Shell Task Execution in JarvisAgent (make-example Workflow)
+
+This document describes how JarvisAgent executes **shell-based tasks** for the `make-example` workflow (the small “makefile-style” compilation demo), which builds:
+
+- `lib1.o`, `lib2.o`, `main.o`, `app.o`
+- `libmylib.a` (static library)
+- `myapp` (final executable)
+
+It focuses on **what happens**, in **which order**, and **which major components are involved**, based on the current code and the log output you captured.
+
+## 1. High-level Data Flow
+
+At a high level, a run of the `make-example` workflow goes through these stages:
+
+1. **Engine + App startup**
+2. **Workflows loaded and registered**
+3. **Trigger registered and fired**
+4. **Workflow orchestrated as a DAG of tasks**
+5. **Shell tasks executed in dependency order**
+6. **Workflow marked as complete**
+
+In log form, the critical lines are (abridged):
+
+```text
+[Application] [info] WorkflowRegistry::LoadDirectory scanning ../workflows
+[Application] [info] Loading workflow file ../workflows/make_example.jcwf
+[Application] [info] Registered workflow make-example
+[Application] [info] Validating workflow make-example
+[Application] [info] TriggerEngine::AddAutoTrigger: registered auto trigger 'auto' for workflow 'make-example'
+[Application] [info] TriggerEngine::FireTrigger: firing trigger 'auto' for workflow 'make-example'
+[Application] [info] JarvisAgent: Trigger fired for workflow 'make-example' (trigger id 'auto')
+[Application] [info] WorkflowOrchestrator: Starting workflow 'make-example' (run id 'make-example_...')
+```
+
+Then the shell tasks:
+
+```text
+[Application] [info] [shell] Executing shell task 'compile_lib1'
+[Application] [info] [shell] Command: scripts/compile.sh ../workflows/lib1.cpp ../workflows/lib1.o
+...
+[Application] [info] [shell] Executing shell task 'make_static_lib'
+[Application] [info] [shell] Command: scripts/archive.sh ../workflows/lib1.o ../workflows/lib2.o ../workflows/libmylib.a
+...
+[Application] [info] [shell] Executing shell task 'make_executable'
+[Application] [info] [shell] Command: scripts/link.sh ../workflows/main.o ../workflows/app.o ../workflows/libmylib.a ../workflows/myapp
+[Application] [info] WorkflowOrchestrator: Workflow 'make-example' (...) completed successfully
+```
+
+## 2. Components / Classes Involved
+
+- Engine / Core
+- JarvisAgent Application
+- WorkflowRegistry
+- TriggerEngine
+- WorkflowOrchestrator
+- Shell execution helper (shell task runner)
+- External scripts + toolchain (g++, ar, linker)
+
+## 3. Task Order and Dependencies
+
+DAG order:
+
+- Parallel leaf tasks:
+  - compile_lib1, compile_lib2, compile_main, compile_app
+- Then:
+  - make_static_lib (depends_on: compile_lib1, compile_lib2)
+- Then:
+  - make_executable (depends_on: compile_main, compile_app, make_static_lib)
+
+## 4. Detailed Shell Task Example
+
+compile_lib1 resolves:
+- file_inputs[0] -> ../workflows/lib1.cpp
+- file_outputs[0] -> ../workflows/lib1.o
+args: ["${input[0]}", "${output[0]}"] -> becomes the resolved paths.
+
+## 5. Re-running the workflow
+
+With freshness checks implemented for JCWF:
+- If outputs exist and are newer than all inputs and upstream outputs, tasks are skipped as up-to-date.
+- Touching lib1.cpp should rebuild lib1.o, then libmylib.a, then myapp.
+
+---
+```
+
+### 7.5 `PROB_make_process_context.output.txt` (generated JCWF)
+
+```json
+{
+  "version": "1.0",
+  "id": "make-example",
+  "label": "Makefile-Style Build Workflow",
+  "doc": "Build example: compile sources, archive static lib, link executable using shell tasks.",
+  "triggers": [
+    {
+      "type": "auto",
+      "id": "auto",
+      "enabled": true,
+      "params": {}
+    }
+  ],
+  "tasks": {
+    "compile_lib1": {
+      "id": "compile_lib1",
+      "type": "shell",
+      "label": "Compile lib1.cpp to lib1.o",
+      "file_inputs": ["lib1.cpp"],
+      "file_outputs": ["lib1.o"],
+      "params": {
+        "command": "scripts/compile.sh",
+        "args": ["${input[0]}", "${output[0]}", "-O3"]
+      },
+      "outputs": {
+        "object": { "type": "string" }
+      }
+    },
+    "compile_lib2": {
+      "id": "compile_lib2",
+      "type": "shell",
+      "label": "Compile lib2.cpp to lib2.o",
+      "file_inputs": ["lib2.cpp"],
+      "file_outputs": ["lib2.o"],
+      "params": {
+        "command": "scripts/compile.sh",
+        "args": ["${input[0]}", "${output[0]}", "-O3"]
+      },
+      "outputs": {
+        "object": { "type": "string" }
+      }
+    },
+    "make_static_lib": {
+      "id": "make_static_lib",
+      "type": "shell",
+      "label": "Archive lib1.o and lib2.o into libmylib.a",
+      "depends_on": ["compile_lib1", "compile_lib2"],
+      "file_inputs": ["lib1.o", "lib2.o"],
+      "file_outputs": ["libmylib.a"],
+      "params": {
+        "command": "scripts/archive.sh",
+        "args": ["${input[0]}", "${input[1]}", "${output[0]}"]
+      },
+      "inputs": {
+        "obj1": { "type": "string", "required": true },
+        "obj2": { "type": "string", "required": true }
+      },
+      "outputs": {
+        "archive": { "type": "string" }
+      }
+    },
+    "compile_main": {
+      "id": "compile_main",
+      "type": "shell",
+      "label": "Compile main.cpp to main.o",
+      "file_inputs": ["main.cpp"],
+      "file_outputs": ["main.o"],
+      "params": {
+        "command": "scripts/compile.sh",
+        "args": ["${input[0]}", "${output[0]}", "-O3"]
+      },
+      "outputs": {
+        "object": { "type": "string" }
+      }
+    },
+    "compile_app": {
+      "id": "compile_app",
+      "type": "shell",
+      "label": "Compile app.cpp to app.o",
+      "file_inputs": ["app.cpp"],
+      "file_outputs": ["app.o"],
+      "params": {
+        "command": "scripts/compile.sh",
+        "args": ["${input[0]}", "${output[0]}", "-O3"]
+      },
+      "outputs": {
+        "object": { "type": "string" }
+      }
+    },
+    "make_executable": {
+      "id": "make_executable",
+      "type": "shell",
+      "label": "Link main.o, app.o, libmylib.a into myapp",
+      "depends_on": ["compile_main", "compile_app", "make_static_lib"],
+      "file_inputs": ["main.o", "app.o", "libmylib.a"],
+      "file_outputs": ["myapp"],
+      "params": {
+        "command": "scripts/link.sh",
+        "args": ["${input[0]}", "${input[1]}", "${input[2]}", "${output[0]}", "-O3"]
+      },
+      "inputs": {
+        "main_obj": { "type": "string", "required": true },
+        "app_obj": { "type": "string", "required": true },
+        "archive": { "type": "string", "required": true }
+      }
+    }
+  },
+  "dataflow": [
+    {
+      "from_task": "compile_lib1",
+      "from_output": "object",
+      "to_task": "make_static_lib",
+      "to_input": "obj1"
+    },
+    {
+      "from_task": "compile_lib2",
+      "from_output": "object",
+      "to_task": "make_static_lib",
+      "to_input": "obj2"
+    },
+    {
+      "from_task": "make_static_lib",
+      "from_output": "archive",
+      "to_task": "make_executable",
+      "to_input": "archive"
+    },
+    {
+      "from_task": "compile_main",
+      "from_output": "object",
+      "to_task": "make_executable",
+      "to_input": "main_obj"
+    },
+    {
+      "from_task": "compile_app",
+      "from_output": "object",
+      "to_task": "make_executable",
+      "to_input": "app_obj"
+    }
+  ]
+}
+```
